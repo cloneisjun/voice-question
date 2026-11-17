@@ -1,0 +1,280 @@
+import AppKit
+import VQCore
+
+/// Everything the binary does when it is not the menu-bar app: the agent hooks and the commands.
+enum CLI {
+
+    static let usage = """
+    VoiceQuestion \(VQ.version) — hear an AI agent's question, answer it by voice.
+
+    USAGE
+      VoiceQuestion                      Run the menu-bar app (normally started at login).
+      VoiceQuestion test                 Ask a sample question through the running app.
+      VoiceQuestion ask --question TEXT [--option LABEL]... [--multi] [--header TEXT]
+                        [--simulate TRANSCRIPT] [--json]
+                                         Ask your own question. Exit 0 answered, 2 skipped, 1 error.
+      VoiceQuestion status [--json]      What the running app sees.
+      VoiceQuestion doctor               Check permissions, Wispr Flow and the installed hooks.
+      VoiceQuestion miccheck             Measure the microphone level for three seconds.
+      VoiceQuestion hooks install [--settings FILE]... [--codex]
+      VoiceQuestion hooks uninstall [--settings FILE]... [--codex]
+      VoiceQuestion hooks status [--settings FILE]...
+      VoiceQuestion hook claude|codex    The PreToolUse hook itself (reads the hook JSON on stdin).
+
+    ENVIRONMENT
+      VQ_DISABLE=1                 Hooks do nothing (the agent shows its own dialog).
+      VQ_SIMULATE_TRANSCRIPT=TEXT  Skip all audio and answer with TEXT ("a|b" for several questions).
+      VQ_SOCKET, VQ_CONFIG, VQ_LOG Relocate the socket, settings and log (test instances).
+    """
+
+    static func run(_ arguments: [String]) -> Never {
+        var rest = arguments
+        let command = rest.removeFirst()
+        switch command {
+        case "hook": hook(rest)
+        case "ask": ask(rest)
+        case "test": test()
+        case "status": status(json: rest.contains("--json"))
+        case "doctor": doctor()
+        case "miccheck": micCheck()
+        case "hooks": hooks(rest)
+        case "--version", "-v", "version":
+            print(VQ.version)
+            exit(0)
+        case "--help", "-h", "help":
+            print(usage)
+            exit(0)
+        default:
+            printError("unknown command: \(command)\n\n\(usage)")
+            exit(64)
+        }
+    }
+
+    // MARK: - Hooks (called by the agents)
+
+    /// A hook must never get in the agent's way: on any problem it prints nothing and exits 0,
+    /// which leaves the agent's own question dialog in place.
+    private static func hook(_ arguments: [String]) -> Never {
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        guard VQ.environment("VQ_DISABLE") != "1", IPCClient.isAppRunning() else { exit(0) }
+        let simulated = VQ.environment("VQ_SIMULATE_TRANSCRIPT").map { $0.components(separatedBy: "|") }
+        // Stay inside the hook timeout the installer sets, so the agent never has to kill us.
+        let timeout = TimeInterval(HookSettings.timeoutSeconds - 20)
+
+        switch arguments.first {
+        case "claude":
+            guard let parsed = ClaudeHook.parse(input), parsed.toolName == "AskUserQuestion",
+                  let response = IPCClient.ask(ClaudeHook.request(from: parsed, simulateTranscripts: simulated), timeout: timeout),
+                  response.status == .answered,
+                  let output = ClaudeHook.output(for: parsed, answers: response.answers) else { exit(0) }
+            print(output)
+        case "codex":
+            guard let parsed = CodexHook.parse(input), CodexHook.toolNames.contains(parsed.toolName),
+                  let response = IPCClient.ask(CodexHook.request(from: parsed, simulateTranscripts: simulated), timeout: timeout),
+                  response.status == .answered,
+                  let output = CodexHook.output(answers: response.answers) else { exit(0) }
+            print(output)
+        default:
+            break
+        }
+        exit(0)
+    }
+
+    // MARK: - Commands
+
+    private static func requireApp() {
+        guard !IPCClient.isAppRunning() else { return }
+        printError(L("VoiceQuestion 앱이 실행 중이 아닙니다. ~/Applications/VoiceQuestion.app 을 열어 주세요.",
+                     "The VoiceQuestion app is not running. Open ~/Applications/VoiceQuestion.app first."))
+        exit(1)
+    }
+
+    private static func value(after flag: String, in arguments: [String]) -> [String] {
+        arguments.indices.filter { arguments[$0] == flag && $0 + 1 < arguments.count }.map { arguments[$0 + 1] }
+    }
+
+    private static func ask(_ arguments: [String]) -> Never {
+        guard let text = value(after: "--question", in: arguments).first else {
+            printError("ask: --question is required")
+            exit(64)
+        }
+        let question = Question(question: text, header: value(after: "--header", in: arguments).first,
+                                options: value(after: "--option", in: arguments).map { QuestionOption(label: $0) },
+                                multiSelect: arguments.contains("--multi"))
+        let simulated = value(after: "--simulate", in: arguments).first.map { [$0] }
+            ?? VQ.environment("VQ_SIMULATE_TRANSCRIPT").map { $0.components(separatedBy: "|") }
+        finish(AskRequest(id: "cli-\(UUID().uuidString.prefix(8))", source: .cli, questions: [question], simulateTranscripts: simulated),
+               json: arguments.contains("--json"))
+    }
+
+    private static func test() -> Never {
+        var request = AppDelegate.demoRequest
+        request.simulateTranscripts = VQ.environment("VQ_SIMULATE_TRANSCRIPT").map { $0.components(separatedBy: "|") }
+        finish(request, json: false)
+    }
+
+    private static func finish(_ request: AskRequest, json: Bool) -> Never {
+        requireApp()
+        guard let response = IPCClient.ask(request) else {
+            printError("no response from the app")
+            exit(1)
+        }
+        if json {
+            print(String(data: (try? VQ.encoder(pretty: true).encode(response)) ?? Data(), encoding: .utf8) ?? "{}")
+        } else if response.status == .answered {
+            response.answers.forEach { print($0.answer) }
+        } else {
+            printError("\(response.status.rawValue): \(response.reason ?? "-")")
+        }
+        exit(response.status == .answered ? 0 : (response.status == .skipped ? 2 : 1))
+    }
+
+    private static func status(json: Bool) -> Never {
+        requireApp()
+        guard let report = IPCClient.status() else {
+            printError("no response from the app")
+            exit(1)
+        }
+        if json {
+            print(String(data: (try? VQ.encoder(pretty: true).encode(report)) ?? Data(), encoding: .utf8) ?? "{}")
+        } else {
+            print("""
+            VoiceQuestion \(report.version)  \(report.enabled ? "enabled" : "PAUSED")\(report.busy ? "  (asking a question now)" : "")
+              microphone permission : \(report.microphonePermission)
+              accessibility         : \(report.accessibilityTrusted ? "granted" : "not granted (only needed for deliver=paste)")
+              Wispr Flow            : \(report.wisprInstalled ? (report.wisprRunning ? "running" : "installed, not running") : "not installed")
+              ChatGPT watcher       : \(report.watchers["codex"] ?? "-")
+              Aside watcher         : \(report.watchers["aside"] ?? "-")
+            """)
+        }
+        exit(0)
+    }
+
+    private static func micCheck() -> Never {
+        requireApp()
+        print(L("3초 동안 마이크 레벨을 잽니다. 평소처럼 한두 마디 말해 보세요…", "Measuring the microphone for three seconds. Say a few words…"))
+        guard let data = IPCClient.send(IPCRequest(cmd: "miccheck"), timeout: 12),
+              let report = try? JSONDecoder().decode(MicCheckReport.self, from: data) else {
+            printError("no response from the app")
+            exit(1)
+        }
+        guard report.samples > 0 else {
+            print(L("마이크를 읽지 못했습니다 (권한: \(report.permission)). 메뉴 막대 아이콘 → ‘마이크 권한 요청…’ 을 눌러 주세요.",
+                    "Could not read the microphone (permission: \(report.permission)). Use the menu-bar icon → “Request microphone access…”."))
+            exit(1)
+        }
+        func db(_ value: Double?) -> String { value.map { String(format: "%.1f dBFS", $0) } ?? "-" }
+        print("""
+          device            : \(report.device ?? "-")
+          quietest / loudest: \(db(report.minDb)) / \(db(report.maxDb))
+          average           : \(db(report.averageDb))
+          speech threshold  : \(db(report.speechThresholdDb))  (louder than this counts as speech)
+        """)
+        exit(0)
+    }
+
+    private static func doctor() -> Never {
+        var problems = 0
+        func check(_ ok: Bool, _ title: String, _ detail: String = "") {
+            if !ok { problems += 1 }
+            print("\(ok ? "✓" : "✗") \(title)\(detail.isEmpty ? "" : " — \(detail)")")
+        }
+        func note(_ title: String, _ detail: String) {
+            print("· \(title) — \(detail)")
+        }
+
+        let report = IPCClient.status()
+        check(report != nil, L("앱 실행 중", "App running"), report == nil ? VQ.socketPath : "")
+        if let report {
+            check(report.enabled, L("켜져 있음", "Enabled"), report.enabled ? "" : L("메뉴 막대에서 ‘다시 켜기’", "use Resume in the menu bar"))
+            check(report.microphonePermission == "granted", L("마이크 권한", "Microphone permission"),
+                  report.microphonePermission == "granted" ? "" : L("\(report.microphonePermission): 없으면 말이 끝난 것을 자동으로 알 수 없어 Enter 로 마쳐야 합니다",
+                                                                    "\(report.microphonePermission): without it the end of your answer is not detected; finish with Return"))
+            check(report.wisprInstalled && report.wisprRunning, "Wispr Flow",
+                  report.wisprInstalled ? (report.wisprRunning ? "" : L("실행 중이 아님", "not running")) : L("설치되지 않음", "not installed"))
+            note(L("손쉬운 사용 권한", "Accessibility"), report.accessibilityTrusted ? "granted" : L("없음 (deliver=paste 실험 기능에만 필요)", "not granted (only for deliver=paste)"))
+            note("ChatGPT / Aside", "\(report.watchers["codex"] ?? "-") / \(report.watchers["aside"] ?? "-")")
+        }
+        note(L("소리 출력", "Sound output"), (AudioSystem.outputName() ?? "-") + (AudioSystem.outputIsPrivate()
+            ? L(" (이어폰: 질문과 동시에 마이크 켜짐)", " (headphones: microphone opens with the question)")
+            : L(" (스피커: 질문이 끝난 뒤 마이크 켜짐)", " (speakers: microphone opens after the question)")))
+
+        let claudeSettings = defaultClaudeSettings()
+        let claude = (try? HookSettings.read(claudeSettings)).flatMap { HookSettings.installedCommand(in: $0, agent: .claude) }
+        check(claude != nil, L("Claude Code 훅", "Claude Code hook"), claude ?? L("없음: VoiceQuestion hooks install", "missing: VoiceQuestion hooks install"))
+        if let claude, let path = binaryPath(inCommand: claude) {
+            check(FileManager.default.isExecutableFile(atPath: path), L("훅 실행 파일", "Hook binary"), path)
+        }
+        let codex = (try? HookSettings.read(codexHooksFile())).flatMap { HookSettings.installedCommand(in: $0, agent: .codex) }
+        note(L("Codex 훅 (실험)", "Codex hook (experimental)"), codex ?? L("설치 안 됨 (세션 로그 감시로 동작)", "not installed (the session-log watcher is used)"))
+        note(L("설정 / 로그", "Settings / log"), "\(VQ.configURL.path) / \(VQ.logURL.path)")
+        exit(problems == 0 ? 0 : 1)
+    }
+
+    // MARK: - Hook installation
+
+    private static func defaultClaudeSettings() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/settings.json")
+    }
+
+    private static func codexHooksFile() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/hooks.json")
+    }
+
+    /// `'/path/to/VoiceQuestion' hook claude` → `/path/to/VoiceQuestion`.
+    private static func binaryPath(inCommand command: String) -> String? {
+        guard command.hasPrefix("'"), let end = command.dropFirst().firstIndex(of: "'") else { return nil }
+        return String(command[command.index(after: command.startIndex)..<end])
+    }
+
+    private static func hooks(_ arguments: [String]) -> Never {
+        let explicit = value(after: "--settings", in: arguments).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+        var targets: [(url: URL, agent: HookSettings.Agent)] = (explicit.isEmpty ? [defaultClaudeSettings()] : explicit).map { ($0, .claude) }
+        if arguments.contains("--codex") { targets.append((codexHooksFile(), .codex)) }
+        let binary = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).resolvingSymlinksInPath().path
+
+        var failed = false
+        switch arguments.first {
+        case "install":
+            for target in targets {
+                do {
+                    let current = try HookSettings.read(target.url)
+                    try HookSettings.write(HookSettings.install(into: current, binaryPath: binary, agent: target.agent), to: target.url)
+                    print("installed \(target.agent.rawValue) hook → \(target.url.path)")
+                } catch {
+                    failed = true
+                    printError("\(target.url.path): \(error)")
+                }
+            }
+            if targets.contains(where: { $0.agent == .codex }) {
+                print(L("Codex 훅은 ChatGPT 앱에서 ‘신뢰’를 눌러야 실행됩니다 (설정 → Hooks).",
+                        "The Codex hook only runs once you trust it in the ChatGPT app (Settings → Hooks)."))
+            }
+        case "uninstall":
+            for target in targets {
+                do {
+                    let current = try HookSettings.read(target.url)
+                    guard HookSettings.isInstalled(in: current, agent: target.agent) else {
+                        print("no \(target.agent.rawValue) hook in \(target.url.path)")
+                        continue
+                    }
+                    try HookSettings.write(HookSettings.uninstall(from: current, agent: target.agent), to: target.url)
+                    print("removed \(target.agent.rawValue) hook ← \(target.url.path)")
+                } catch {
+                    failed = true
+                    printError("\(target.url.path): \(error)")
+                }
+            }
+        case "status":
+            if !arguments.contains("--codex") { targets.append((codexHooksFile(), .codex)) }
+            for target in targets {
+                let command = (try? HookSettings.read(target.url)).flatMap { HookSettings.installedCommand(in: $0, agent: target.agent) }
+                print("\(target.agent.rawValue)  \(target.url.path)\n    \(command ?? "not installed")")
+            }
+        default:
+            printError("hooks: expected install, uninstall or status")
+            exit(64)
+        }
+        exit(failed ? 1 : 0)
+    }
+}
