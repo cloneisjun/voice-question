@@ -98,7 +98,7 @@ Return send · Shift-Return new line · Esc cancel or edit · ⌘R speak again �
 | **Aside** | Daemon log watcher | Copies the answer to the clipboard; you press ⌘V | Reading and dictation are automatic, pasting is manual. Not yet verified with a live question |
 | **Clone** | Claude Code hook (its own settings folder) | The hook returns the answer | Add it yourself with `--settings` |
 
-More detail lives in three documents, which are written in Korean:
+More detail lives in three documents:
 
 - [docs/app-support.md](docs/app-support.md): how each app is detected and answered, and the limits
 - [docs/verification.md](docs/verification.md): what has been verified and what has not
@@ -173,15 +173,17 @@ Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRI
 ## Development
 
 ```sh
-./scripts/test.sh    # unit tests (VQCore)
-./scripts/build.sh   # build/VoiceQuestion.app
+./scripts/test.sh        # unit tests (VQCore)
+./scripts/build.sh       # build/VoiceQuestion.app
+./scripts/make-icon.sh   # Resources/AppIcon.icns, after changing the logo
 ```
 
 ```
 Sources/VQCore/         Logic without AppKit: models, IPC, answer matching, end-of-speech detection, hook and log parsers
 Sources/VoiceQuestion/  Menu bar app and CLI: panel, session state machine, TTS, Wispr control, log watchers, delivery
 Tests/VQCoreTests/      Unit tests
-scripts/                build / install / uninstall / test
+Resources/              Info.plist and the app icon (AppIcon.icns, generated from the logo)
+scripts/                build / install / uninstall / test / make-icon
 docs/assets/            Logo (logo.svg is the source, logo.png is a 512 px render)
 ```
 

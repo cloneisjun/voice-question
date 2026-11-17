@@ -1,30 +1,30 @@
-# 검증 상태
+# Verification status
 
-2026-11-17, macOS 27.2 · Wispr Flow · Claude Code에서 확인한 내용입니다. 실제 목소리로 하는 확인은 사람이 해야 해서 남겨 두었습니다.
+Checked on 2026-11-17 with macOS 27.2, Wispr Flow and Claude Code. Checks that need a real voice have to be done by a person, so they were left open.
 
-## 확인한 것
+## Verified
 
-| 항목 | 방법 |
+| Item | How |
 |---|---|
-| 단위 테스트 44개 | `./scripts/test.sh`: 답변 해석(선택지·순서·한국어 숫자·여러 개 선택·건너뛰기), 말 끝 감지 상태 기계, hook 입출력, hook 설치·제거(백업, 기존 hook 보존), Codex·Aside 로그 파서, Wispr 기록 조회, 소켓 IPC |
-| Claude Code가 hook의 답을 받는다 | 실제 Claude Code 세션(SDK)에 설치한 hook으로 `AskUserQuestion`을 호출시켜, 질문 창 없이 도구 결과에 답이 들어가는 것을 확인 (받아쓰기 대신 `VQ_SIMULATE_TRANSCRIPT` 사용) |
-| 원래 질문 창으로 돌아간다 | `VQ_DISABLE=1`, 앱이 꺼져 있을 때, "건너뛰기"라고 답했을 때 hook이 아무것도 출력하지 않고 Claude Code가 자기 질문 창을 요청하는 것을 확인 |
-| 패널이 쓰던 앱을 밀어내지 않는다 | 패널이 떠 있는 동안 맨 앞 앱이 바뀌지 않음 |
-| 패널이 키보드 입력을 받는다 | 맨 앞 앱이 다른 앱인 상태에서 시스템 전역 키 입력이 패널에 도착 |
-| Wispr Flow 자동 시작·종료 | 앱이 딥링크로 받아쓰기를 켜면 Wispr Flow가 녹음 상태가 되고(CoreAudio로 확인), 끄면 Wispr 기록에 한 건이 생김 |
-| 아무 말도 안 했을 때 | Enter로 끝냈는데 인식된 글이 없으면 다시 물어보고 한 번 더 들은 뒤 건너뜀(`no_transcript`). 마이크 권한 없이 아무도 답하지 않으면 제한 시간 뒤 다시 묻지 않고 건너뜀(`no_speech`) |
-| 붙여넣기로 답이 들어온다 | 받아쓰기 종료 직후 패널에 ⌘V를 보내 "두 번째" → 선택지 2번으로 해석 → 2초 확인 → 답변 완료 (Wispr 대신 합성 키 입력 사용) |
-| 릴리스 앱 번들 | `./scripts/build.sh`로 빌드, 서명 검증 |
+| 44 unit tests | `./scripts/test.sh`: answer matching (options, positions, Korean numerals, several choices, skip), the end-of-speech state machine, hook input and output, installing and removing hooks (backup, existing hooks kept), the Codex and Aside log parsers, Wispr history lookup, socket IPC |
+| Claude Code accepts the hook's answer | In a real Claude Code session (SDK) with the hook installed, `AskUserQuestion` was called and the answer arrived in the tool result without a question dialog (with `VQ_SIMULATE_TRANSCRIPT` in place of dictation) |
+| It falls back to the app's own question dialog | With `VQ_DISABLE=1`, with the app not running, and with the answer "건너뛰기" ("skip"), the hook printed nothing and Claude Code asked for its own question dialog |
+| The panel does not push aside the app you are using | The frontmost app did not change while the panel was showing |
+| The panel receives keyboard input | With another app frontmost, system-wide key events reached the panel |
+| Wispr Flow starts and stops automatically | When the app turns dictation on through the deep link, Wispr Flow starts recording (checked through CoreAudio), and turning it off adds one entry to the Wispr history |
+| When nothing is said | Finishing with Return when nothing was recognized asks again, listens once more, then skips (`no_transcript`). Without the microphone permission, when nobody answers, it skips after the time limit without asking again (`no_speech`) |
+| The answer arrives by paste | Right after dictation ended, ⌘V was sent to the panel with "두 번째" ("the second one") → matched to option 2 → 2-second confirmation → answered (synthetic key events in place of Wispr) |
+| Release app bundle | Built with `./scripts/build.sh`, signature verified |
 
-## 아직 확인하지 못한 것
+## Not yet verified
 
-| 항목 | 이유 | 확인 방법 |
+| Item | Why | How to check |
 |---|---|---|
-| 실제 목소리 → Wispr Flow 받아쓰기 → 답 | 사람 목소리가 필요 | README 테스트 2·3·7번 |
-| 말 끝 자동 감지(마이크 레벨) | 마이크 권한은 사용자가 직접 허용해야 함. 로직은 단위 테스트로만 확인 | 테스트 2번, `vq miccheck` |
-| 읽어 주는 소리의 품질·음량 | 소리를 끈 상태로만 실행 | 테스트 2번 |
-| `install.sh` · 로그인 항목 | 사용자 계정에 상주 프로그램과 전역 hook을 설치하는 일이라 실행하지 않음 | `./scripts/install.sh` |
-| ChatGPT·Aside의 클립보드 전달, 실험용 `paste` / `resume` / `steer` | 실제 질문 카드가 떠 있어야 함. 파서만 단위 테스트로 확인 | 테스트 9번 |
-| Codex `PreToolUse` hook | ChatGPT 앱에서 hook을 신뢰해야 실행됨 | `vq hooks install --codex` 후 앱에서 신뢰 |
-| Claude 데스크톱 Code 탭 | 앱 코드만 읽어 확인 | Code 탭에서 테스트 7번 |
-| 앱에서 직접 답했을 때 음성 흐름 중단 | 실제 질문 창이 필요 | 음성 패널이 떠 있는 동안 원래 앱에서 답해 보기 |
+| A real voice → Wispr Flow dictation → answer | Needs a person's voice | Tests 2, 3 and 7 in the README |
+| Automatic end-of-speech detection (microphone level) | Only the user can grant the microphone permission. The logic is covered by unit tests only | Test 2, `vq miccheck` |
+| Quality and volume of the spoken question | Only run with the sound off | Test 2 |
+| `install.sh` and the login item | It installs a background program and a global hook into the user's account, so it was not run | `./scripts/install.sh` |
+| Clipboard delivery for ChatGPT and Aside, and the experimental `paste` / `resume` / `steer` | Needs a live question card. Only the parsers are unit-tested | Test 9 |
+| Codex `PreToolUse` hook | Runs only once the hook is trusted in the ChatGPT app | `vq hooks install --codex`, then trust it in the app |
+| Claude desktop Code tab | Checked only by reading the app's code | Test 7 in the Code tab |
+| The voice flow stops when you answer in the app | Needs a real question dialog | Answer in the original app while the voice panel is showing |
