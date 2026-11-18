@@ -2,6 +2,13 @@
 
 Latest checks on 2026-11-18 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
 
+## Faster speech setting — 2026-11-18
+
+- The user found all three comparison voices too slow. The local settings had `speechRate: 1.0`; only that value was changed to `1.5`, with an atomic write and a decoded JSON comparison confirming every other value was preserved. The selected online engine and Korean SunHi voice remain unchanged. Repository defaults remain at `1.0`.
+- The installed CLI exported `build/voice-preview/sunhi-numbered-ko-1.5x.mp3` with the same question text as the previous SunHi comparison. Its `AVAudioPlayer` validation succeeded. The old sample is 13.248 seconds; the faster sample is 8.856 seconds, about 33% shorter. This is synthesized at the configured rate, rather than sped up by an audio player. The files were checked programmatically, not audibly reviewed for naturalness.
+- `SessionCoordinator.startNext()` loads settings for each new question, and menu/CLI voice previews also load settings at invocation. The next question therefore uses the updated rate without reinstalling or restarting. Before and after the change the installed app was idle, the two watchers were running, and microphone permission was `granted`. No question panel, microphone or Wispr recording was started for this export.
+- No application source or binary changed, so no build or test rerun was needed. This adjustment addresses speaking speed; perceived voice quality and a real spoken-answer test still require the user's review.
+
 ## Korean option pronunciation and voice comparison — 2026-11-18
 
 - The real question at 23:49:48 KST used `ko-KR-SunHiNeural`: the installed app logged online synthesis at 23:49:48.944 and online playback at 23:49:50.290, with no offline fallback. It was cancelled at 23:49:58.898 when the CLI client disconnected, so this was not a completed dictation test. The user reported that the voice still sounded awkward and that numbered options sounded like repetition counts.

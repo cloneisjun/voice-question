@@ -154,6 +154,8 @@ vq tts use system            # switch back to offline speech
 
 The same preview is available as **Question voice → Preview voice only**. It is unavailable during a question, and a new question stops a menu preview. Engine changes apply from the next question. The app never switches a local user to an online engine automatically.
 
+To make speech faster, use **Open settings file** in the menu and set the top-level `"speechRate": 1.5`. This applies to both offline and online voices from the next question or voice preview; no rebuild, restart or new microphone permission is needed. `1.0` is the default speed, `1.25` is moderately faster, and `1.5` is faster still. Online synthesis accepts multipliers from `0.5` to `2.0` (values outside that range are clamped); offline voices use macOS's supported rate limits. This changes speaking speed, not the voice itself or the wait for online synthesis.
+
 Korean defaults to `ko-KR-SunHiNeural`, English to `en-US-EmmaMultilingualNeural`. To customize online voices, add this to your settings (merge it with your other settings):
 
 ```json
