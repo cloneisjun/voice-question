@@ -1,6 +1,16 @@
 # Verification status
 
-Checked on 2026-11-17 with macOS 27.2, Wispr Flow and Claude Code. Checks that need a real voice have to be done by a person, so they were left open.
+Latest checks on 2026-11-18 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
+
+## Configurable neural voices — 2026-11-18
+
+- New installations and old configuration files default to offline macOS TTS. The menu and `tts use system|edge` choose the engine. Online voices are opt-in and use the separately installed `edge-tts==7.3.1` Python client. Korean uses `ko-KR-SunHiNeural`, English `en-US-EmmaMultilingualNeural`; both can be changed per language. Online question text goes to Microsoft, while VoiceQuestion does not send the microphone input or dictated answer to this TTS service.
+- The real service returned both configured voice names. The release executable exported a Korean MP3 (7.944 seconds) and an English MP3 (5.136 seconds). Both opened successfully with `AVAudioPlayer` and `afinfo`: mono, 24 kHz, 48 kbps. No microphone or Wispr Flow was started for these previews.
+- A real neural synthesis and playback ran at volume zero and reached `edge playback finished success=true`. A deliberately missing Python runtime fell back to macOS speech, then reached `system playback finished`. The temporary synthesis directories were removed afterward. This verifies the playback lifecycle, not perceived sound quality.
+- New subprocess tests use local fixtures without network or audio: text travels on stdin rather than shell arguments; shell characters and Korean text are preserved; temporary audio directories are private; missing/failing runtimes complete once; timeout deletes partial audio; cancellation cannot invoke a completion; replacing synthesis ignores the old process's exit. A menu test constructs the menu without showing it and confirms both choices, one checked engine and a preview action. Configuration tests preserve old settings and keep malformed/unknown engines offline.
+- `./scripts/test.sh` passed all 67 tests (48 core, 19 AppKit/subprocess). The release build was installed with `./scripts/install.sh --no-hooks` while the app was idle. The installed executable and build both have SHA-256 `81a3b68c30d4d689ad20db7d57cdb44cf43bc214099e8d6bbc5f75493027b7d9`; `codesign --verify --strict` passed. The Claude settings hash is unchanged. The app is idle and both watchers are running. This Mac is explicitly configured for the online engine; repository defaults remain offline.
+- Reinstalling the ad-hoc-signed app reset microphone permission from `granted` to `notDetermined`. A person must allow it again for automatic end-of-speech detection. Voice-only previews do not need this permission.
+- Human checks remaining: listen to the exported samples; try the menu on screen; confirm that neural playback, a physical option click and dictation cooperate in a real question. The automatic tests do not open a microphone, change focus or show a panel.
 
 ## One-click answers and the symbol panel — 2026-11-18
 

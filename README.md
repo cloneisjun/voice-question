@@ -18,7 +18,7 @@ When an AI agent stops to ask you something (`AskUserQuestion`), VoiceQuestion *
 | | Step | How |
 |---|---|---|
 | 1 | The agent asks a question | A Claude Code hook, or a log watcher for ChatGPT and Aside |
-| 2 | The question is read aloud | macOS text-to-speech, with a panel at the top of the screen |
+| 2 | The question is read aloud | Your choice of offline macOS speech or online neural TTS, with a panel at the top of the screen |
 | 3 | The microphone turns on | `wispr-flow://start-hands-free` |
 | 4 | You answer, and the end of your speech is detected | Microphone input level (voice activity detection) |
 | 5 | The microphone turns off | `wispr-flow://stop-hands-free` |
@@ -132,6 +132,45 @@ More detail lives in three documents:
 - [docs/verification.md](docs/verification.md): what has been verified and what has not
 - [docs/similar-projects.md](docs/similar-projects.md): similar open-source projects
 
+## Question voices
+
+Choose **Question voice** in the menu bar:
+
+| Engine | What it uses | Network / setup |
+|---|---|---|
+| **On this Mac · Offline** (default) | The best installed macOS voice for the question's language | No network or extra dependency. Enhanced/Premium voices sound better than the compact voices supplied with macOS. |
+| **Neural voice · Microsoft online** | Microsoft Edge neural voices through the optional [edge-tts](https://github.com/rany2/edge-tts) client | Internet required; question text is sent to Microsoft. No API key or paid account is needed by this client. |
+
+Online voices are optional. Install their runtime once (Python 3.9+ is required), then select the engine:
+
+```sh
+./scripts/setup-neural-tts.sh
+vq tts use edge
+vq tts preview --language ko  # speech only: no panel, microphone or Wispr Flow
+vq tts preview --language en
+vq tts use system            # switch back to offline speech
+```
+
+The same preview is available as **Question voice → Preview voice only**. It is unavailable during a question, and a new question stops a menu preview. Engine changes apply from the next question. The app never switches a local user to an online engine automatically.
+
+Korean defaults to `ko-KR-SunHiNeural`, English to `en-US-EmmaMultilingualNeural`. To customize online voices, add this to your settings (merge it with your other settings):
+
+```json
+{
+  "tts": {
+    "engine": "edge",
+    "voices": { "ko": "ko-KR-SunHiNeural", "en": "en-US-EmmaMultilingualNeural" },
+    "timeoutSeconds": 15
+  }
+}
+```
+
+Other Korean choices include `ko-KR-InJoonNeural` and `ko-KR-HyunsuMultilingualNeural`; `en-US-JennyNeural` is another English choice. List current voice names with `"$HOME/Library/Application Support/VoiceQuestion/tts-venv/bin/python3" -m edge_tts --list-voices`. Online voice names go in `tts.voices`; macOS identifiers stay in the separate top-level `voices` map. An optional `tts.pythonPath` can point to your own Python environment.
+
+If online synthesis fails, times out, or has no configured voice for the question's language, the question uses the offline macOS voice. Cancelling or answering a question stops synthesis and playback. Generated audio lives in a private temporary directory and is removed after playback or cancellation. For a sample you want to keep, `vq tts preview --language ko --output sample.mp3` exports without playing audio or opening a microphone; existing files are never overwritten.
+
+`edge-tts` is a third-party LGPL-3.0 client, installed separately in a user virtual environment; this is not an official Azure Speech integration and availability may change. The Swift app still builds and runs offline without it. Provider code is isolated in `NeuralSpeechRenderer.swift` and `Speaker.swift`, so other cloud or local engines can be added without changing question detection, dictation or answer delivery.
+
 ## Settings
 
 `~/Library/Application Support/VoiceQuestion/config.json` (menu → **Open settings file**). Every key is optional, and a saved change applies from the next question.
@@ -157,6 +196,8 @@ More detail lives in three documents:
 | `speakQuestions` | `true` | When off, there is no sound, only the panel and the microphone |
 | `speakOptions`, `speakOptionDescriptions` | `true`, `false` | Also read the options, and their descriptions |
 | `speechRate`, `speechVolume` | `1.0` | Speaking rate multiplier, and volume (0 to 1) |
+| `tts.engine` | `system` | `system`: offline macOS voices. `edge`: optional online neural voices. Also selectable in the menu or with `vq tts use` |
+| `tts.voices`, `tts.timeoutSeconds`, `tts.pythonPath` | Korean SunHi / English Emma, `15`, managed venv | Online voice names, synthesis timeout, optional Python interpreter. See Question voices above |
 | `voices` | `{}` | A voice per language, for example `{"ko": "com.apple.voice.premium.ko-KR.Yuna"}` |
 | `autoSendDelaySeconds` | `2.0` | Time to review the transcribed answer before it is sent. `0` sends right away |
 | `retriesOnEmpty` | `1` | How many times to listen again when nothing was recognized |
@@ -189,7 +230,8 @@ Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRI
 - Microphone: only the input level (dB) is computed. Audio is never recorded, stored or sent anywhere. Wispr Flow does the dictation.
 - Wispr Flow history (`flow.sqlite`): read-only, and only to look up the dictation you just made when its paste did not reach the panel.
 - By default the log does not contain what you said, only its length in characters.
-- No network access. The app and the hook talk only over a local Unix socket.
+- Offline TTS (the default) makes no network requests. The app and hooks communicate over a local Unix socket.
+- Opting into online TTS sends the text being read (the question and any enabled options/descriptions) to Microsoft. VoiceQuestion does not send microphone audio or your dictated answer to the TTS service. Wispr Flow handles dictation under its own settings.
 
 ## Uninstall
 

@@ -212,7 +212,7 @@ final class QuestionSession: QuestionPanelDelegate {
         guard config.speakQuestions, let text, !text.isEmpty else { return speechFinished() }
         let current = attempt
         speaker.speak(text, language: language, rate: config.speechRate, volume: config.speechVolume,
-                      voiceIdentifier: config.voices[language]) { [weak self] in
+                      voiceIdentifier: config.voices[language], settings: config.tts) { [weak self] in
             guard let self, self.attempt == current else { return }
             self.speechFinished()
         }

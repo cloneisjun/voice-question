@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var asideWatcher: AsideWatcher?
     private var statusItem: NSStatusItem?
     private var micCheck: MicLevelMonitor?
+    private let previewSpeaker = Speaker()
     /// A test instance (`VQ_HEADLESS=1`) shows no menu-bar item and never prompts for permissions.
     private let headless = VQ.environment("VQ_HEADLESS") == "1"
 
@@ -67,7 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         guard !headless else { return }
         setUpStatusItem()
-        coordinator.onChange = { [weak self] in self?.updateIcon() }
+        coordinator.onChange = { [weak self] in
+            guard let self else { return }
+            if self.coordinator.isBusy { self.previewSpeaker.stop() }
+            self.updateIcon()
+        }
         if MicLevelMonitor.permission == .notDetermined {
             MicLevelMonitor.requestPermission { granted in Log.info("app: microphone permission \(granted ? "granted" : "denied")") }
         }
@@ -230,6 +235,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         action(L("테스트 질문 실행", "Ask a test question"), #selector(askTestQuestion))
+        let voiceItem = NSMenuItem(title: L("질문 음성", "Question voice"), action: nil, keyEquivalent: "")
+        let voiceMenu = NSMenu()
+        for (engine, title) in [(VQConfig.TTS.Engine.system, L("이 Mac에서 · 오프라인", "On this Mac · Offline")),
+                                (.edge, L("신경망 음성 · Microsoft 온라인", "Neural voice · Microsoft online"))] {
+            let item = NSMenuItem(title: title, action: #selector(selectVoiceEngine(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = engine.rawValue
+            item.state = config.tts.engine == engine ? .on : .off
+            voiceMenu.addItem(item)
+        }
+        voiceMenu.addItem(.separator())
+        let preview = NSMenuItem(title: L("목소리만 미리 듣기", "Preview voice only"), action: #selector(previewVoice), keyEquivalent: "")
+        preview.target = self
+        preview.isEnabled = !coordinator.isBusy
+        voiceMenu.addItem(preview)
+        voiceItem.submenu = voiceMenu
+        menu.addItem(voiceItem)
         action(config.enabled ? L("일시 중지", "Pause") : L("다시 켜기", "Resume"), #selector(toggleEnabled))
         if MicLevelMonitor.permission == .notDetermined {
             action(L("마이크 권한 요청…", "Request microphone access…"), #selector(requestMicrophone))
@@ -257,6 +279,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         config.save()
         Log.info("app: \(config.enabled ? "resumed" : "paused")")
         updateIcon()
+    }
+
+    @objc private func selectVoiceEngine(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let engine = VQConfig.TTS.Engine(rawValue: raw) else { return }
+        var config = VQConfig.load()
+        if engine == .edge, !FileManager.default.isExecutableFile(atPath: config.tts.resolvedPythonPath) {
+            Toast.show(L("온라인 음성 설치가 필요해요 · README의 Question voices를 확인하세요",
+                         "Install online voices first · see Question voices in the README"))
+            return
+        }
+        previewSpeaker.stop()
+        config.tts.engine = engine
+        guard config.save() else { return }
+        Log.info("tts: selected \(engine.rawValue)")
+    }
+
+    @objc private func previewVoice() {
+        guard !coordinator.isBusy else { return }
+        let config = VQConfig.load()
+        let language = Locale.preferredLanguages.contains { $0.hasPrefix("ko") } ? "ko" : "en"
+        previewSpeaker.speak(CLI.voicePreviewText(language), language: language, rate: config.speechRate,
+                             volume: config.speechVolume, voiceIdentifier: config.voices[language], settings: config.tts) {}
     }
 
     @objc private func requestMicrophone() {

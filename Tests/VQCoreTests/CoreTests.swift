@@ -122,6 +122,22 @@ private func feed(_ detector: inout VoiceActivityDetector, level: Double, second
     #expect(VQConfig.load(from: url) == changed)
 }
 
+@Test func ttsDefaultsStayOfflineAndOldSettingsRemainValid() throws {
+    let old = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"speechRate":0.9,"voices":{"ko":"mac-voice"}}"#.utf8))
+    #expect(old.tts.engine == .system)
+    #expect(old.voices["ko"] == "mac-voice")
+    #expect(old.tts.voice(for: "ko-KR") == "ko-KR-SunHiNeural")
+    #expect(old.tts.voice(for: "fr") == nil) // unsupported online languages stay local
+    let partial = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"tts":{"engine":"edge"}}"#.utf8))
+    #expect(partial.tts.engine == .edge)
+    #expect(partial.tts.timeoutSeconds == 15)
+    #expect(partial.tts.voice(for: "en") == "en-US-EmmaMultilingualNeural")
+    let malformed = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"tts":{"engine":"missing","timeoutSeconds":"forever"}}"#.utf8))
+    #expect(malformed.tts.engine == .system)
+    #expect(malformed.tts.timeoutSeconds == 15)
+    #expect(try JSONDecoder().decode(VQConfig.self, from: JSONEncoder().encode(partial)) == partial)
+}
+
 // MARK: - Hook settings
 
 @Test func installKeepsExistingSettings() throws {

@@ -4,6 +4,40 @@ import Foundation
 /// Every key is optional in the file; missing keys take the defaults below.
 public struct VQConfig: Codable, Equatable {
 
+    public struct TTS: Codable, Equatable {
+        public enum Engine: String, Codable, CaseIterable {
+            case system
+            case edge
+        }
+
+        /// Offline by default; online synthesis is always an explicit choice.
+        public var engine = Engine.system
+        /// Optional Python interpreter with edge-tts installed. Empty uses the managed venv.
+        public var pythonPath = ""
+        public var timeoutSeconds = 15.0
+        /// Microsoft voice names, separate from macOS voice identifiers in `voices`.
+        public var voices = ["ko": "ko-KR-SunHiNeural", "en": "en-US-EmmaMultilingualNeural"]
+
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            engine = c.value(.engine, default: engine)
+            pythonPath = c.value(.pythonPath, default: pythonPath)
+            timeoutSeconds = c.value(.timeoutSeconds, default: timeoutSeconds)
+            voices = c.value(.voices, default: voices)
+        }
+
+        public var resolvedPythonPath: String {
+            if !pythonPath.isEmpty { return (pythonPath as NSString).expandingTildeInPath }
+            return URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Library/Application Support/VoiceQuestion/tts-venv/bin/python3").path
+        }
+
+        public func voice(for language: String) -> String? {
+            voices[language] ?? voices[String(language.prefix(2))]
+        }
+    }
+
     public enum MicStart: String, Codable {
         /// Headphones: mic on as soon as the question starts playing (you can interrupt it).
         /// Speakers: mic on the moment the question finishes, so the dictation does not pick up the TTS.
@@ -99,6 +133,7 @@ public struct VQConfig: Codable, Equatable {
     public var speechRate = 1.0
     /// 0…1, relative to the system output volume.
     public var speechVolume = 1.0
+    public var tts = TTS()
     /// Language code ("ko", "en", ...) → voice identifier. Empty picks the best installed voice.
     public var voices: [String: String] = [:]
     /// After the answer is recognised, wait this long before sending so it can be cancelled or edited.
@@ -125,6 +160,7 @@ public struct VQConfig: Codable, Equatable {
         speakOptionDescriptions = c.value(.speakOptionDescriptions, default: speakOptionDescriptions)
         speechRate = c.value(.speechRate, default: speechRate)
         speechVolume = c.value(.speechVolume, default: speechVolume)
+        tts = c.value(.tts, default: tts)
         voices = c.value(.voices, default: voices)
         autoSendDelaySeconds = c.value(.autoSendDelaySeconds, default: autoSendDelaySeconds)
         retriesOnEmpty = c.value(.retriesOnEmpty, default: retriesOnEmpty)

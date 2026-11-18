@@ -1,0 +1,2 @@
+# Optional, installed in a separate user venv; never needed for offline TTS or Swift builds.
+edge-tts==7.3.1

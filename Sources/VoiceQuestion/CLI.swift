@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import VQCore
 
 /// Everything the binary does when it is not the menu-bar app: the agent hooks and the commands.
@@ -16,6 +17,10 @@ enum CLI {
       VoiceQuestion status [--json]      What the running app sees.
       VoiceQuestion doctor               Check permissions, Wispr Flow and the installed hooks.
       VoiceQuestion miccheck             Measure the microphone level for three seconds.
+      VoiceQuestion tts status           Show the selected TTS engine and neural voices.
+      VoiceQuestion tts use system|edge  Select offline system or online neural TTS.
+      VoiceQuestion tts preview [--language ko|en] [--text TEXT] [--output FILE.mp3]
+                                         Preview TTS only (never opens a microphone).
       VoiceQuestion hooks install [--settings FILE]... [--codex]
       VoiceQuestion hooks uninstall [--settings FILE]... [--codex]
       VoiceQuestion hooks status [--settings FILE]...
@@ -37,6 +42,7 @@ enum CLI {
         case "status": status(json: rest.contains("--json"))
         case "doctor": doctor()
         case "miccheck": micCheck()
+        case "tts": tts(rest)
         case "hooks": hooks(rest)
         case "--version", "-v", "version":
             print(VQ.version)
@@ -212,6 +218,80 @@ enum CLI {
     }
 
     // MARK: - Hook installation
+
+    static func voicePreviewText(_ language: String) -> String {
+        language.hasPrefix("ko")
+            ? "안녕하세요. 어떤 음성이 더 편하게 들리시나요? 원하는 선택지를 눌러 주세요."
+            : "Hello. Which voice feels more natural to you? Choose the option you prefer."
+    }
+
+    private static func tts(_ arguments: [String]) -> Never {
+        var config = VQConfig.load()
+        switch arguments.first {
+        case "status":
+            print("engine: \(config.tts.engine.rawValue)")
+            print("online runtime: \(FileManager.default.isExecutableFile(atPath: config.tts.resolvedPythonPath) ? "installed" : "not installed")")
+            for language in config.tts.voices.keys.sorted() { print("\(language): \(config.tts.voices[language]!)") }
+            exit(0)
+        case "use":
+            guard arguments.count == 2, let engine = VQConfig.TTS.Engine(rawValue: arguments[1]) else {
+                printError("tts use: expected system or edge")
+                exit(64)
+            }
+            guard engine != .edge || FileManager.default.isExecutableFile(atPath: config.tts.resolvedPythonPath) else {
+                printError("Install online voices first: ./scripts/setup-neural-tts.sh")
+                exit(1)
+            }
+            config.tts.engine = engine
+            guard config.save() else { printError("could not save settings"); exit(1) }
+            print(engine == .edge ? "Online neural TTS selected. Question text is sent to Microsoft for speech synthesis."
+                  : "Offline system TTS selected. Question text stays on this Mac.")
+            exit(0)
+        case "preview":
+            guard IPCClient.status()?.busy != true else { printError("Wait for the current question to finish."); exit(1) }
+            let language = value(after: "--language", in: arguments).first ?? "ko"
+            let text = value(after: "--text", in: arguments).first ?? voicePreviewText(language)
+            if let path = value(after: "--output", in: arguments).first {
+                guard config.tts.engine == .edge, let voice = config.tts.voice(for: language) else {
+                    printError("Export requires edge TTS and a configured voice for \(language).")
+                    exit(1)
+                }
+                let target = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                guard !FileManager.default.fileExists(atPath: target.path) else {
+                    printError("Output already exists: \(target.path)")
+                    exit(1)
+                }
+                let renderer = NeuralSpeechRenderer()
+                var done = false
+                var succeeded = false
+                renderer.render(text, voice: voice, rate: config.speechRate, settings: config.tts) { result in
+                    defer { done = true }
+                    if case .success(let url) = result {
+                        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+                        do {
+                            let audio = try AVAudioPlayer(contentsOf: url)
+                            guard audio.duration > 0 else { throw NeuralSpeechRenderer.Failure.failed }
+                            try FileManager.default.copyItem(at: url, to: target)
+                            print("\(target.path) (\(String(format: "%.2f", audio.duration)) seconds, \(voice))")
+                            succeeded = true
+                        } catch { printError("Could not export a valid audio file.") }
+                    } else { printError("Online synthesis failed or timed out. No preview exported.") }
+                }
+                while !done { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+                exit(succeeded ? 0 : 1)
+            }
+            let speaker = Speaker()
+            var done = false
+            speaker.speak(text, language: language, rate: config.speechRate, volume: config.speechVolume,
+                          voiceIdentifier: config.voices[language], settings: config.tts) { done = true }
+            while !done { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+            Log.flush()
+            exit(0)
+        default:
+            printError("tts: expected status, use system|edge, or preview [--language ko|en] [--text TEXT] [--output FILE.mp3]")
+            exit(64)
+        }
+    }
 
     private static func defaultClaudeSettings() -> URL {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/settings.json")
