@@ -10,5 +10,6 @@ let package = Package(
         // Menu-bar agent + CLI (`VoiceQuestion hook claude`, `ask`, `test`, `doctor`, ...).
         .executableTarget(name: "VoiceQuestion", dependencies: ["VQCore"], path: "Sources/VoiceQuestion"),
         .testTarget(name: "VQCoreTests", dependencies: ["VQCore"], path: "Tests/VQCoreTests"),
+        .testTarget(name: "VQUITests", dependencies: ["VoiceQuestion", "VQCore"], path: "Tests/VQUITests"),
     ]
 )

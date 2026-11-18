@@ -2,6 +2,14 @@
 
 Checked on 2026-11-17 with macOS 27.2, Wispr Flow and Claude Code. Checks that need a real voice have to be done by a person, so they were left open.
 
+## Option-click fix — 2026-11-18
+
+- Reproduced the click-routing defect with a hidden AppKit panel: hit testing returned the number/title/description labels or the padding's stack view rather than the option row. The row also allowed window-background dragging. Both regression tests failed before the fix.
+- The whole card now routes mouse input to the option row, which disables background dragging. The regression tests pass for the number, title, description and both side paddings, first-mouse acceptance, one callback per click, and no hit outside the card.
+- `./scripts/test.sh` passed all 46 tests (44 core tests and 2 AppKit tests). These checks never show a window, move the pointer, activate an app or start a microphone. A physical mouse click in the installed app still needs user confirmation.
+- Single-choice clicks already commit immediately in `QuestionSession.panelDidPickOption`; multi-select clicks toggle choices until Send / Return. That behavior was unchanged.
+- Built and installed the fix with `./scripts/install.sh --no-hooks`. The app and login item restarted successfully; existing hooks were retained. The new build also includes the previously added logo icon. The installed executable's SHA-256 matches the build, and its signature verifies. Microphone permission was initially `notDetermined` during installation and was `granted` on the subsequent status check; both watchers were running and no question was active.
+
 ## Verified
 
 | Item | How |
@@ -23,7 +31,6 @@ Checked on 2026-11-17 with macOS 27.2, Wispr Flow and Claude Code. Checks that n
 | A real voice → Wispr Flow dictation → answer | Needs a person's voice | Tests 2, 3 and 7 in the README |
 | Automatic end-of-speech detection (microphone level) | Only the user can grant the microphone permission. The logic is covered by unit tests only | Test 2, `vq miccheck` |
 | Quality and volume of the spoken question | Only run with the sound off | Test 2 |
-| `install.sh` and the login item | It installs a background program and a global hook into the user's account, so it was not run | `./scripts/install.sh` |
 | Clipboard delivery for ChatGPT and Aside, and the experimental `paste` / `resume` / `steer` | Needs a live question card. Only the parsers are unit-tested | Test 9 |
 | Codex `PreToolUse` hook | Runs only once the hook is trusted in the ChatGPT app | `vq hooks install --codex`, then trust it in the app |
 | Claude desktop Code tab | Checked only by reading the app's code | Test 7 in the Code tab |

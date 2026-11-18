@@ -75,6 +75,8 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 
 Menu and panel text follow the system language: Korean when Korean is your first preferred language, English otherwise. On a Korean system the menu items above read 테스트 질문 실행 (Ask a test question) and 일시 중지 (Pause). The voice follows the language of each question. The sample question is in Korean (김치찌개 / 파스타 / 샐러드) whenever Korean appears anywhere in your preferred languages, otherwise in English (Sushi / Pasta / Salad).
 
+Click anywhere on an option card, including its number, title or description. For a single-choice question, one click sends the answer immediately; there is no extra Send step. For a multiple-choice question, click to toggle the options, then press **Send** or Return. Typing an answer also requires **Send** or Return.
+
 ### What you can say
 
 - An option's name, its position ("the first one", "number two", "the last one"), or several at once when the question allows it ("one and three")
@@ -173,7 +175,7 @@ Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRI
 ## Development
 
 ```sh
-./scripts/test.sh        # unit tests (VQCore)
+./scripts/test.sh        # core logic and AppKit option-click regression tests
 ./scripts/build.sh       # build/VoiceQuestion.app
 ./scripts/make-icon.sh   # Resources/AppIcon.icns, after changing the logo
 ```
@@ -182,6 +184,7 @@ Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRI
 Sources/VQCore/         Logic without AppKit: models, IPC, answer matching, end-of-speech detection, hook and log parsers
 Sources/VoiceQuestion/  Menu bar app and CLI: panel, session state machine, TTS, Wispr control, log watchers, delivery
 Tests/VQCoreTests/      Unit tests
+Tests/VQUITests/        Option-card mouse routing (hidden windows, no microphone)
 Resources/              Info.plist and the app icon (AppIcon.icns, generated from the logo)
 scripts/                build / install / uninstall / test / make-icon
 docs/assets/            Logo (logo.svg is the source, logo.png is a 512 px render)

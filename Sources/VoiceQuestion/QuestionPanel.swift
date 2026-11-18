@@ -531,6 +531,14 @@ final class OptionRowView: NSView {
         layer?.backgroundColor = color.cgColor
     }
 
+    // Labels and stack views are decoration, not separate click targets. In this
+    // draggable nonactivating panel they otherwise swallow clicks or start a drag.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
     // Clickable even while another app's window is key.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
