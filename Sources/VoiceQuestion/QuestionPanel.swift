@@ -2,19 +2,42 @@ import AppKit
 import VQCore
 
 protocol QuestionPanelDelegate: AnyObject {
-    /// Return / the Send button.
+    /// Return / the send button.
     func panelDidSubmit()
-    /// Esc / the Skip button.
+    /// Esc.
     func panelDidCancel()
-    /// ⌘R.
+    /// The close button.
+    func panelDidSkip()
+    /// ⌘R / the speak-again button.
     func panelDidRequestRetry()
-    /// A click on an option, or ⌘1…⌘9.
-    func panelDidPickOption(_ index: Int)
+    /// A click on an option, or ⌘1…⌘9. `collecting` is a ⌘- or ⇧-click: add the option to a
+    /// selection rather than answer with it.
+    func panelDidPickOption(_ index: Int, collecting: Bool)
     /// Something was pasted (this is how Wispr Flow delivers a transcript). Return true when the
     /// session consumed it, false to let it be inserted like ordinary text.
     func panelDidReceivePaste(_ text: String) -> Bool
     /// The user typed in the answer field.
     func panelTextDidChangeByUser()
+    /// The user clicked into the answer field.
+    func panelDidClickAnswerField()
+}
+
+/// What the panel shows the app doing. Each state is a symbol in the answer field, not a sentence.
+enum PanelState: Equatable {
+    /// The question is being read aloud.
+    case reading
+    /// The microphone is open.
+    case listening
+    /// The microphone is open and speech has been heard.
+    case hearing
+    case transcribing
+    /// The answer is in, and is sent after this many seconds unless the user steps in.
+    case confirming(seconds: TimeInterval)
+    /// The user is typing or choosing by hand.
+    case editing
+    /// Voice input is not working: type or click.
+    case unavailable
+    case finishing
 }
 
 /// The floating question card: question, options, an editable answer field and the listening state.
@@ -23,25 +46,38 @@ protocol QuestionPanelDelegate: AnyObject {
 /// without pulling VoiceQuestion in front of the app the user is working in.
 final class QuestionPanel: NSObject, NSTextViewDelegate {
     weak var delegate: QuestionPanelDelegate?
+    /// False lays the panel out and draws it without ever putting it on screen (tests).
+    var showsWindow = true
 
     private static let width: CGFloat = 460
     private static let inset: CGFloat = 16
+    private static let contentWidth = width - 2 * inset
+    private static let answerFont = NSFont.systemFont(ofSize: 14)
+    private static let answerInset = NSSize(width: 2, height: 10)
+    /// The answer field between the state symbol (7 + 26 + 1) and the send button (2 + 32 + 4).
+    private static let answerWidth = contentWidth - 72
+    private static let answerMinHeight: CGFloat = 40
 
     private let panel: KeyablePanel
     private let stack = NSStackView()
+    private let sourceIcon = NSImageView()
     private let sourceLabel = QuestionPanel.label(size: 11, weight: .medium, color: .secondaryLabelColor)
-    private let statusLabel = QuestionPanel.label(size: 11, weight: .medium, color: .secondaryLabelColor)
+    private let dots = ProgressDots()
+    private let closeButton = IconButton(style: .plain, diameter: 22, pointSize: 10)
     private let questionLabel = QuestionPanel.label(size: 15, weight: .semibold, color: .labelColor, wraps: true)
     private let optionsStack = NSStackView()
-    private let answerBox = NSView()
+    private let answerBox = RoundedBox()
+    private let stateButton = IconButton(style: .plain, diameter: 26, pointSize: 13)
     private let scrollView = NSScrollView()
     private let textView = AnswerTextView()
-    private let previewLabel = QuestionPanel.label(size: 12, weight: .medium, color: .labelColor, wraps: true)
-    private let levelView = LevelView()
-    private let hintLabel = QuestionPanel.label(size: 11, weight: .regular, color: .secondaryLabelColor)
-    private let skipButton = NSButton(title: "", target: nil, action: nil)
-    private let sendButton = NSButton(title: "", target: nil, action: nil)
+    private let waveform = WaveformView()
+    private let sendButton = IconButton(style: .filled, diameter: 32, pointSize: 12)
+    private let noticeIcon = NSImageView()
+    private let noticeLabel = QuestionPanel.label(size: 11, weight: .regular, color: .secondaryLabelColor, wraps: true)
+    private let noticeRow = NSStackView()
+    private var answerHeight: NSLayoutConstraint!
     private var optionRows: [OptionRowView] = []
+    private var hasLevel = false
     private var programmaticChange = false
     private var activation = VQConfig.PanelActivation.nonactivating
     private var topLeft: NSPoint?
@@ -58,60 +94,94 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
 
     var isVisible: Bool { panel.isVisible }
     var isKey: Bool { panel.isKeyWindow }
+    /// The panel's views, to lay out and click through without a window on screen (tests).
+    var contentView: NSView? { panel.contentView }
 
     var answerText: String {
         textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Shows a question without taking the keyboard.
-    func present(source: String, question: Question, index: Int, total: Int, activation: VQConfig.PanelActivation) {
+    func present(source: QuestionSource, title: String?, question: Question, index: Int, total: Int,
+                 activation: VQConfig.PanelActivation) {
         self.activation = activation
-        sourceLabel.stringValue = total > 1 ? "\(source)  ·  \(index + 1)/\(total)" : source
+        // The asking app's icon stands in for its name; without one the name is spelled out.
+        let icon = QuestionPanel.icon(for: source)
+        let name = [source.displayName, title].compactMap { $0 }.joined(separator: " · ")
+        sourceIcon.image = icon
+        sourceIcon.isHidden = icon == nil
+        sourceIcon.toolTip = name
+        sourceLabel.stringValue = icon == nil ? name : (title ?? source.displayName)
+        sourceLabel.toolTip = name
+        dots.set(index: index, total: total)
         questionLabel.stringValue = question.question
 
         optionRows.forEach { $0.removeFromSuperview() }
         optionRows = question.options.enumerated().map { offset, option in
-            let row = OptionRowView(number: offset + 1, option: option, width: QuestionPanel.width - 2 * QuestionPanel.inset)
-            row.onClick = { [weak self] in self?.delegate?.panelDidPickOption(offset) }
+            let row = OptionRowView(number: offset + 1, option: option, width: QuestionPanel.contentWidth)
+            row.onClick = { [weak self] collecting in self?.delegate?.panelDidPickOption(offset, collecting: collecting) }
+            if question.multiSelect { row.toolTip = L("⌘-클릭: 여러 개 고르기", "⌘-click to choose several") }
             optionsStack.addArrangedSubview(row)
             return row
         }
         optionsStack.isHidden = optionRows.isEmpty
-        textView.placeholder = question.options.isEmpty
-            ? L("말하거나 직접 입력하세요", "Speak or type your answer")
-            : L("말하거나, 번호를 누르거나, 직접 입력하세요", "Speak, pick a number, or type")
         setAnswerText("")
-        setPreview(nil)
+        setNotice(nil)
         setLevel(nil)
 
         let wasVisible = panel.isVisible
         layout(resetPosition: !wasVisible)
-        if !wasVisible { panel.orderFrontRegardless() }
+        if !wasVisible, showsWindow { panel.orderFrontRegardless() }
     }
 
-    func setStatus(_ text: String) {
-        statusLabel.stringValue = text
+    func setState(_ state: PanelState) {
+        sendButton.stopCountdown()
+        stateButton.onClick = nil
+        waveform.isHearing = state == .hearing
+        switch state {
+        case .reading:
+            stateButton.setSymbol("speaker.wave.2.fill", tint: .labelColor, animated: true, label: L("질문 읽는 중", "Reading the question"))
+        case .listening:
+            stateButton.setSymbol("mic.fill", tint: .labelColor, label: L("듣는 중", "Listening"))
+        case .hearing:
+            stateButton.setSymbol("mic.fill", tint: .systemGreen, label: L("듣는 중", "Listening"))
+        case .transcribing:
+            stateButton.setSymbol("ellipsis", tint: .labelColor, animated: true, label: L("받아쓰는 중", "Transcribing"))
+        case .confirming(let seconds):
+            sendButton.startCountdown(seconds)
+            fallthrough
+        case .editing:
+            stateButton.setSymbol("arrow.counterclockwise", label: L("다시 말하기 (⌘R)", "Speak again (⌘R)"))
+            stateButton.onClick = { [weak self] in self?.delegate?.panelDidRequestRetry() }
+        case .unavailable:
+            stateButton.setSymbol("mic.slash.fill", tint: .systemOrange, label: L("음성 입력 꺼짐", "Voice input is off"))
+        case .finishing:
+            stateButton.setSymbol("checkmark", tint: .systemGreen, label: L("마무리 중", "Finishing"))
+        }
         if KeyablePanel.snapshotDirectory != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.writeSnapshot() } }
     }
 
-    func setHint(_ text: String) {
-        hintLabel.stringValue = text
-    }
-
-    /// "→ 일반 체크카드": what is about to be sent.
-    func setPreview(_ text: String?) {
-        previewLabel.stringValue = text ?? ""
+    /// A line under the answer field, for the cases a symbol cannot explain (Wispr Flow is not
+    /// running, …). Nil hides it, which is the normal state.
+    func setNotice(_ text: String?) {
+        noticeLabel.stringValue = text ?? ""
         let hidden = (text ?? "").isEmpty
-        if previewLabel.isHidden != hidden {
-            previewLabel.isHidden = hidden
+        if noticeRow.isHidden != hidden {
+            noticeRow.isHidden = hidden
             layout(resetPosition: false)
         }
     }
 
-    /// Microphone level in dBFS, or nil to hide the meter.
+    /// Microphone level in dBFS, drawn as a waveform in the empty answer field. Nil clears it.
     func setLevel(_ db: Double?) {
-        levelView.isHidden = db == nil
-        if let db { levelView.level = CGFloat(min(max((db + 60) / 45, 0), 1)) }
+        if let db {
+            hasLevel = true
+            waveform.push(CGFloat(min(max((db + 60) / 45, 0), 1)))
+        } else {
+            hasLevel = false
+            waveform.reset()
+        }
+        waveform.isHidden = !hasLevel || !textView.string.isEmpty
     }
 
     func setAnswerText(_ text: String) {
@@ -120,6 +190,7 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
         textView.needsDisplay = true
         programmaticChange = false
+        answerTextChanged()
     }
 
     func setSelectedOptions(_ indices: [Int]) {
@@ -132,6 +203,7 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
 
     /// Makes the answer field the keyboard target so the dictated text lands here.
     func takeKeyboard() {
+        guard showsWindow else { return }
         if activation == .activate {
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
@@ -146,6 +218,10 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
     func close() {
         panel.orderOut(nil)
         topLeft = nil
+        // Nothing keeps animating or counting down behind a closed panel.
+        stateButton.clear()
+        sendButton.stopCountdown()
+        setLevel(nil)
     }
 
     // MARK: - Construction
@@ -183,10 +259,10 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: QuestionPanel.inset, left: QuestionPanel.inset, bottom: 12, right: QuestionPanel.inset)
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: QuestionPanel.inset, bottom: 14, right: QuestionPanel.inset)
         stack.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(stack)
-        let contentWidth = QuestionPanel.width - 2 * QuestionPanel.inset
+        let contentWidth = QuestionPanel.contentWidth
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
@@ -195,11 +271,24 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
             stack.widthAnchor.constraint(equalToConstant: QuestionPanel.width),
         ])
 
-        // Header: where the question came from, and what the app is doing right now.
-        let header = NSStackView(views: [sourceLabel, NSView(), statusLabel])
+        // Header: who is asking, which question of how many, and the way out.
+        sourceIcon.imageScaling = .scaleProportionallyUpOrDown
+        sourceIcon.translatesAutoresizingMaskIntoConstraints = false
+        sourceIcon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        sourceIcon.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        sourceLabel.lineBreakMode = .byTruncatingMiddle
+        sourceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        dots.translatesAutoresizingMaskIntoConstraints = false
+        dots.setContentHuggingPriority(.required, for: .horizontal)
+        closeButton.setSymbol("xmark", label: L("건너뛰기", "Skip"))
+        closeButton.onClick = { [weak self] in self?.delegate?.panelDidSkip() }
+
+        let header = NSStackView(views: [sourceIcon, sourceLabel, dots, NSView(), closeButton])
         header.orientation = .horizontal
         header.distribution = .fill
-        statusLabel.alignment = .right
+        header.alignment = .centerY
+        header.spacing = 6
+        header.setCustomSpacing(10, after: sourceLabel)
         header.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
         stack.addArrangedSubview(header)
 
@@ -207,18 +296,15 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         questionLabel.maximumNumberOfLines = 8
         questionLabel.isSelectable = true
         stack.addArrangedSubview(questionLabel)
+        stack.setCustomSpacing(12, after: questionLabel)
 
         optionsStack.orientation = .vertical
         optionsStack.alignment = .leading
-        optionsStack.spacing = 4
+        optionsStack.spacing = 5
         stack.addArrangedSubview(optionsStack)
 
-        // Answer field.
-        answerBox.wantsLayer = true
-        answerBox.layer?.cornerRadius = 8
-        answerBox.layer?.borderWidth = 1
-        answerBox.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
-        answerBox.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.25).cgColor
+        // Answer field: what the app is doing on the left, the answer (or, while it is still
+        // empty, the microphone level) in the middle, send on the right.
         answerBox.translatesAutoresizingMaskIntoConstraints = false
 
         scrollView.drawsBackground = false
@@ -229,11 +315,11 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
 
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.font = .systemFont(ofSize: 14)
+        textView.font = QuestionPanel.answerFont
         textView.textColor = .labelColor
         textView.insertionPointColor = .labelColor
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 6, height: 7)
+        textView.textContainerInset = QuestionPanel.answerInset
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
@@ -242,50 +328,53 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.delegate = self
         textView.onPaste = { [weak self] text in self?.delegate?.panelDidReceivePaste(text) ?? false }
+        textView.onMouseDown = { [weak self] in self?.delegate?.panelDidClickAnswerField() }
+        textView.setAccessibilityLabel(L("답변", "Answer"))
         scrollView.documentView = textView
 
-        answerBox.addSubview(scrollView)
+        waveform.translatesAutoresizingMaskIntoConstraints = false
+        waveform.isHidden = true
+        sendButton.setSymbol("arrow.up", label: L("보내기 (Return)", "Send (Return)"))
+        sendButton.onClick = { [weak self] in self?.delegate?.panelDidSubmit() }
+
+        for view in [stateButton, scrollView, waveform, sendButton] { answerBox.addSubview(view) }
+        answerHeight = answerBox.heightAnchor.constraint(equalToConstant: QuestionPanel.answerMinHeight)
+        // The buttons stay on the last line when the field grows.
+        let lastLine = answerBox.bottomAnchor.anchorWithOffset(to: stateButton.centerYAnchor)
         NSLayoutConstraint.activate([
             answerBox.widthAnchor.constraint(equalToConstant: contentWidth),
-            answerBox.heightAnchor.constraint(equalToConstant: 58),
-            scrollView.leadingAnchor.constraint(equalTo: answerBox.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: answerBox.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: answerBox.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: answerBox.bottomAnchor),
+            answerHeight,
+            stateButton.leadingAnchor.constraint(equalTo: answerBox.leadingAnchor, constant: 7),
+            lastLine.constraint(equalToConstant: -QuestionPanel.answerMinHeight / 2),
+            sendButton.trailingAnchor.constraint(equalTo: answerBox.trailingAnchor, constant: -4),
+            sendButton.centerYAnchor.constraint(equalTo: stateButton.centerYAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: stateButton.trailingAnchor, constant: 1),
+            scrollView.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -2),
+            scrollView.topAnchor.constraint(equalTo: answerBox.topAnchor, constant: 1),
+            scrollView.bottomAnchor.constraint(equalTo: answerBox.bottomAnchor, constant: -1),
+            waveform.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 7),
+            waveform.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor, constant: -6),
+            waveform.centerYAnchor.constraint(equalTo: stateButton.centerYAnchor),
+            waveform.heightAnchor.constraint(equalToConstant: 20),
         ])
         stack.addArrangedSubview(answerBox)
 
-        previewLabel.preferredMaxLayoutWidth = contentWidth
-        previewLabel.maximumNumberOfLines = 3
-        previewLabel.isHidden = true
-        stack.addArrangedSubview(previewLabel)
+        // Only for what a symbol cannot say; hidden otherwise.
+        noticeIcon.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        noticeIcon.contentTintColor = .systemOrange
+        noticeIcon.setContentHuggingPriority(.required, for: .horizontal)
+        noticeLabel.preferredMaxLayoutWidth = contentWidth - 20
+        noticeLabel.maximumNumberOfLines = 2
+        noticeRow.orientation = .horizontal
+        noticeRow.alignment = .firstBaseline
+        noticeRow.spacing = 5
+        noticeRow.addArrangedSubview(noticeIcon)
+        noticeRow.addArrangedSubview(noticeLabel)
+        noticeRow.isHidden = true
+        stack.addArrangedSubview(noticeRow)
 
-        // Footer: level meter, key hints, buttons.
-        skipButton.title = L("건너뛰기", "Skip")
-        sendButton.title = L("보내기", "Send")
-        for button in [skipButton, sendButton] {
-            button.bezelStyle = .rounded
-            button.controlSize = .small
-            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            button.target = self
-            button.refusesFirstResponder = true
-        }
-        skipButton.action = #selector(skipClicked)
-        sendButton.action = #selector(sendClicked)
-        levelView.translatesAutoresizingMaskIntoConstraints = false
-        levelView.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        levelView.heightAnchor.constraint(equalToConstant: 6).isActive = true
-        hintLabel.lineBreakMode = .byTruncatingTail
-        hintLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        hintLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let footer = NSStackView(views: [levelView, hintLabel, skipButton, sendButton])
-        footer.orientation = .horizontal
-        footer.distribution = .fill
-        footer.alignment = .centerY
-        footer.spacing = 8
-        footer.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
-        stack.addArrangedSubview(footer)
+        setState(.reading)
     }
 
     private static func label(size: CGFloat, weight: NSFont.Weight, color: NSColor, wraps: Bool = false) -> NSTextField {
@@ -293,6 +382,19 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         label.font = .systemFont(ofSize: size, weight: weight)
         label.textColor = color
         return label
+    }
+
+    /// The icon of the app that is asking, when that app is installed here.
+    private static func icon(for source: QuestionSource) -> NSImage? {
+        let bundleIDs: [String]
+        switch source {
+        case .claudeCode: bundleIDs = ["com.anthropic.claudefordesktop"]
+        case .codex: bundleIDs = ["com.openai.codex", "com.openai.chat"]
+        case .aside: bundleIDs = ["at.studio.AsideBrowser"]
+        case .cli: return Bundle.main.bundleIdentifier == VQ.bundleID ? NSApp.applicationIconImage : nil
+        }
+        return bundleIDs.lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
+            .map { NSWorkspace.shared.icon(forFile: $0.path) }
     }
 
     /// Fits the window to its content, keeping the top edge where it is.
@@ -311,34 +413,59 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
     }
 
+    /// One line while the answer is short, up to five as it grows; longer answers scroll.
+    private func answerTextChanged() {
+        waveform.isHidden = !hasLevel || !textView.string.isEmpty
+
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: QuestionPanel.answerFont))
+        var height = line
+        if !textView.string.isEmpty {
+            let padding = textView.textContainer?.lineFragmentPadding ?? 5
+            let width = QuestionPanel.answerWidth - 2 * QuestionPanel.answerInset.width - 2 * padding
+            let bounds = (textView.string as NSString).boundingRect(
+                with: NSSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: QuestionPanel.answerFont])
+            height = min(max(line, ceil(bounds.height)), line * 5)
+        }
+        let target = max(QuestionPanel.answerMinHeight, height + 2 * QuestionPanel.answerInset.height + 2)
+        guard abs(answerHeight.constant - target) > 0.5 else { return }
+        answerHeight.constant = target
+        layout(resetPosition: false)
+    }
+
+    /// The panel as a PNG at 2x (without the blur behind it), to check the layout by eye. Works
+    /// without the panel being on screen.
+    func snapshotPNG() -> Data? {
+        guard let view = panel.contentView else { return nil }
+        let bounds = view.bounds
+        func bitmap() -> NSBitmapImageRep? {
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
+                                       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+            rep?.size = bounds.size
+            return rep
+        }
+        guard let content = bitmap(), let result = bitmap(), let context = NSGraphicsContext(bitmapImageRep: result) else { return nil }
+        view.cacheDisplay(in: bounds, to: content)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor(white: 0.14, alpha: 1).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12).fill()
+        content.draw(in: bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        return result.representation(using: .png, properties: [:])
+    }
+
     private var snapshotCount = 0
 
-    /// Draws the panel into `panel-N.png` (without the blur behind it), to check the layout by eye.
+    /// `VQ_DEBUG_SNAPSHOT`: saves `panel-N.png` on every state change.
     private func writeSnapshot() {
-        guard let directory = KeyablePanel.snapshotDirectory, panel.isVisible, let view = panel.contentView,
-              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        let image = NSImage(size: view.bounds.size, flipped: false) { rect in
-            NSColor(white: 0.14, alpha: 1).setFill()
-            rect.fill()
-            bitmap.draw(in: rect)
-            return true
-        }
-        guard let tiff = image.tiffRepresentation,
-              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        guard let directory = KeyablePanel.snapshotDirectory, panel.isVisible, let png = snapshotPNG() else { return }
         snapshotCount += 1
         try? png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("panel-\(snapshotCount).png"))
     }
 
     // MARK: - Input
-
-    @objc private func skipClicked() {
-        delegate?.panelDidCancel()
-    }
-
-    @objc private func sendClicked() {
-        delegate?.panelDidSubmit()
-    }
 
     /// ⌘-shortcuts, by key code so they work in any keyboard layout or input source.
     private func handleCommandKey(_ keyCode: UInt16) -> Bool {
@@ -368,7 +495,7 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
         default:
             // Number row: 1 2 3 4 5 6 7 8 9
             if let index = [18, 19, 20, 21, 23, 22, 26, 28, 25].firstIndex(of: Int(keyCode)), index < optionRows.count {
-                delegate?.panelDidPickOption(index)
+                delegate?.panelDidPickOption(index, collecting: false)
                 return true
             }
             return false
@@ -391,7 +518,7 @@ final class QuestionPanel: NSObject, NSTextViewDelegate {
     }
 
     func textDidChange(_ notification: Notification) {
-        textView.needsDisplay = true
+        answerTextChanged()
         if !programmaticChange { delegate?.panelTextDidChangeByUser() }
     }
 }
@@ -405,7 +532,7 @@ final class KeyablePanel: NSPanel {
 
     /// `VQ_DEBUG_KEYS=1` logs the key codes that reach the panel (to check keyboard routing).
     static let logsKeys = VQ.environment("VQ_DEBUG_KEYS") == "1"
-    /// `VQ_DEBUG_SNAPSHOT=DIR` saves a picture of the panel on every status change.
+    /// `VQ_DEBUG_SNAPSHOT=DIR` saves a picture of the panel on every state change.
     static let snapshotDirectory = VQ.environment("VQ_DEBUG_SNAPSHOT")
 
     override var canBecomeKey: Bool { true }
@@ -442,7 +569,7 @@ final class KeyablePanel: NSPanel {
 
 final class AnswerTextView: NSTextView {
     var onPaste: ((String) -> Bool)?
-    var placeholder = "" { didSet { needsDisplay = true } }
+    var onMouseDown: (() -> Void)?
 
     override func paste(_ sender: Any?) {
         let text = NSPasteboard.general.string(forType: .string) ?? ""
@@ -450,124 +577,9 @@ final class AnswerTextView: NSTextView {
         pasteAsPlainText(sender)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard string.isEmpty, !hasMarkedText(), !placeholder.isEmpty else { return }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.systemFont(ofSize: 14),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.38),
-        ]
-        let origin = NSPoint(x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 5), y: textContainerInset.height)
-        placeholder.draw(at: origin, withAttributes: attributes)
-    }
-}
-
-final class OptionRowView: NSView {
-    var onClick: (() -> Void)?
-    var isSelected = false { didSet { updateAppearance() } }
-    private var isHovered = false { didSet { updateAppearance() } }
-
-    init(number: Int, option: QuestionOption, width: CGFloat) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 7
-        translatesAutoresizingMaskIntoConstraints = false
-
-        let badge = NSTextField(labelWithString: "\(number)")
-        badge.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-        badge.textColor = .secondaryLabelColor
-        badge.alignment = .center
-        badge.translatesAutoresizingMaskIntoConstraints = false
-        badge.widthAnchor.constraint(equalToConstant: 16).isActive = true
-
-        let textWidth = width - 16 - 8 - 20
-        let title = NSTextField(wrappingLabelWithString: option.label)
-        title.font = .systemFont(ofSize: 13, weight: .medium)
-        title.textColor = .labelColor
-        title.preferredMaxLayoutWidth = textWidth
-        title.maximumNumberOfLines = 2
-
-        let texts = NSStackView(views: [title])
-        texts.orientation = .vertical
-        texts.alignment = .leading
-        texts.spacing = 1
-        if let description = option.description, !description.isEmpty {
-            let detail = NSTextField(wrappingLabelWithString: description)
-            detail.font = .systemFont(ofSize: 11)
-            detail.textColor = .secondaryLabelColor
-            detail.preferredMaxLayoutWidth = textWidth
-            detail.maximumNumberOfLines = 2
-            texts.addArrangedSubview(detail)
-        }
-
-        let row = NSStackView(views: [badge, texts])
-        row.orientation = .horizontal
-        row.alignment = .firstBaseline
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: width),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-        updateAppearance()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not used")
-    }
-
-    private func updateAppearance() {
-        let color: NSColor
-        if isSelected {
-            color = NSColor.controlAccentColor.withAlphaComponent(0.55)
-        } else {
-            color = NSColor.white.withAlphaComponent(isHovered ? 0.14 : 0.07)
-        }
-        layer?.backgroundColor = color.cgColor
-    }
-
-    // Labels and stack views are decoration, not separate click targets. In this
-    // draggable nonactivating panel they otherwise swallow clicks or start a drag.
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        super.hitTest(point) == nil ? nil : self
-    }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    // Clickable even while another app's window is key.
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
     override func mouseDown(with event: NSEvent) {
-        onClick?()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-}
-
-/// A small horizontal meter showing the microphone level.
-final class LevelView: NSView {
-    var level: CGFloat = 0 { didSet { needsDisplay = true } }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let track = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
-        NSColor.white.withAlphaComponent(0.15).setFill()
-        track.fill()
-        guard level > 0.02 else { return }
-        let filled = NSRect(x: 0, y: 0, width: max(bounds.height, bounds.width * level), height: bounds.height)
-        NSColor.systemGreen.setFill()
-        NSBezierPath(roundedRect: filled, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        onMouseDown?()
+        super.mouseDown(with: event)
     }
 }
 

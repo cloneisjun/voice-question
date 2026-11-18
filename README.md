@@ -72,10 +72,36 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 | 8 | Menu → **Pause**, then repeat 7 | Claude Code's own question dialog appears |
 | 9 | Have ChatGPT desktop (Codex) ask a question | You hear the question, the answer is copied to the clipboard, and the thread opens. Press ⌘V in the question card |
 | 10 | The flow without any sound: `vq ask --question "Color?" --option Red --option Blue --simulate "the second one"` | "Blue", with no audio |
+| 11 | `vq ask --question "Toppings?" --option Cheese --option Basil --option Olives --multi --json`, then click **Basil** | `Basil` is sent at once. Run it again, ⌘-click **Cheese** and **Olives**, then press Return: `Cheese, Olives` |
 
 Menu and panel text follow the system language: Korean when Korean is your first preferred language, English otherwise. On a Korean system the menu items above read 테스트 질문 실행 (Ask a test question) and 일시 중지 (Pause). The voice follows the language of each question. The sample question is in Korean (김치찌개 / 파스타 / 샐러드) whenever Korean appears anywhere in your preferred languages, otherwise in English (Sushi / Pasta / Salad).
 
-Click anywhere on an option card, including its number, title or description. For a single-choice question, one click sends the answer immediately; there is no extra Send step. For a multiple-choice question, click to toggle the options, then press **Send** or Return. Typing an answer also requires **Send** or Return.
+### The panel
+
+<p align="center">
+  <img src="docs/assets/panel.png" width="460" alt="The question panel while it listens: the asking app's icon, progress dots, three option cards, and a microphone with a live waveform in the answer field">
+</p>
+
+The only text on the panel is the question itself. Everything else is a symbol:
+
+| On the panel | Meaning |
+|---|---|
+| App icon and name, top left | Who is asking, with the session or project name when it is known |
+| Dots next to the name | One per question in this request; the bright one is the current question |
+| ✕ | Skip: go back to the app's own question dialog |
+| Number on a card | ⌘ and that number answers with the option. It turns into a check mark when the option is chosen |
+| ★ on a card | The option the agent recommends (its label ends in "(Recommended)") |
+| Speaker | The question is being read |
+| Microphone and moving bars | Listening. The bars follow the microphone level and turn green once your voice is heard |
+| Three dots | Transcribing |
+| Ring around ↑ | Your answer is sent when the ring is gone (`autoSendDelaySeconds`). Return sends it now; Esc or a click in the text stops the ring so you can edit |
+| ↺ | Speak again (⌘R) |
+| Crossed-out microphone and a line of text | Voice input is not available right now; click an option or type |
+| ↑ | Send (Return) |
+
+Hover over a symbol to see its name.
+
+**One click on an option sends it as the answer.** That holds for questions that allow several options too; there is no extra Send step. Click anywhere on the card, including its number, title or description. To choose several options with the mouse, ⌘-click (or ⇧-click) each one, then press ↑ or Return; by voice, say them together ("one and three"). A typed answer is sent with ↑ or Return.
 
 ### What you can say
 
@@ -87,7 +113,7 @@ The same works in Korean: "두 번째", "2번", "마지막", "1번이랑 3번", 
 
 ### Panel shortcuts
 
-Return send · Shift-Return new line · Esc cancel or edit · ⌘R speak again · ⌘1…⌘9 pick an option
+Return send · Shift-Return new line · Esc edit during the countdown, otherwise skip · ⌘R speak again · ⌘1…⌘9 answer with an option · ⌘-click or ⇧-click choose several options
 
 ## App support
 
@@ -175,19 +201,21 @@ Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRI
 ## Development
 
 ```sh
-./scripts/test.sh        # core logic and AppKit option-click regression tests
+./scripts/test.sh        # core logic, and the panel driven by synthetic clicks (no window, no audio)
 ./scripts/build.sh       # build/VoiceQuestion.app
 ./scripts/make-icon.sh   # Resources/AppIcon.icns, after changing the logo
 ```
+
+`VQ_SNAPSHOT_DIR=DIR ./scripts/test.sh` also draws every state of the panel offscreen and saves it as a PNG in `DIR`, which is how `docs/assets/panel.png` is made (the blur behind the panel is not part of that picture).
 
 ```
 Sources/VQCore/         Logic without AppKit: models, IPC, answer matching, end-of-speech detection, hook and log parsers
 Sources/VoiceQuestion/  Menu bar app and CLI: panel, session state machine, TTS, Wispr control, log watchers, delivery
 Tests/VQCoreTests/      Unit tests
-Tests/VQUITests/        Option-card mouse routing (hidden windows, no microphone)
+Tests/VQUITests/        The panel and a session behind it: clicks, states, drawing (never on screen, no microphone)
 Resources/              Info.plist and the app icon (AppIcon.icns, generated from the logo)
 scripts/                build / install / uninstall / test / make-icon
-docs/assets/            Logo (logo.svg is the source, logo.png is a 512 px render)
+docs/assets/            Logo (logo.svg is the source, logo.png is a 512 px render) and the panel picture
 ```
 
 A single executable is both the menu bar app and the CLI. The hook (`VoiceQuestion hook claude`) passes the question to the running app over a Unix socket, waits for the answer, and prints it as JSON that Claude Code understands. If the app is not running, or you skip, it prints nothing and exits, so the agent shows its own question dialog.

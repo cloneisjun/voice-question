@@ -20,6 +20,9 @@ final class QuestionSession: QuestionPanelDelegate {
     }
 
     let request: AskRequest
+    /// False keeps Wispr Flow and the microphone out of it: the answer comes from a click or the
+    /// keyboard. Set before `start()`.
+    var allowsVoiceInput = VQ.environment("VQ_NO_WISPR") != "1"
     private let config: VQConfig
     private let panel: QuestionPanel
     private let completion: (AskResponse) -> Void
@@ -48,6 +51,7 @@ final class QuestionSession: QuestionPanelDelegate {
     private var retriedStart = false
     private var warnedStart = false
     private var noSpeech = false
+    private var heardSpeech = false
     private var wisprStartTime = Date.distantPast
     private var recordStart = Date.distantPast
     private var listenStart = Date.distantPast
@@ -91,7 +95,7 @@ final class QuestionSession: QuestionPanelDelegate {
             }
         }
 
-        voiceInput = WisprController.isInstalled && WisprController.isRunning && VQ.environment("VQ_NO_WISPR") != "1"
+        voiceInput = allowsVoiceInput && WisprController.isInstalled && WisprController.isRunning
         if !voiceInput { Log.info("session \(request.id): Wispr Flow is not running; question is read aloud, answer by typing") }
         panel.delegate = self
 
@@ -144,8 +148,8 @@ final class QuestionSession: QuestionPanelDelegate {
             drainStart = Date()
             panel.takeKeyboard()
             panel.setLevel(nil)
-            panel.setStatus(L("마무리 중…", "Finishing…"))
-            panel.setHint("")
+            panel.setState(.finishing)
+            panel.setNotice(nil)
             panel.setButtons(sendEnabled: false)
         } else {
             close()
@@ -167,9 +171,8 @@ final class QuestionSession: QuestionPanelDelegate {
         questionIndex = index
         emptyRetries = 0
         spokenRetries = 0
-        let source = [request.source.displayName, request.title].compactMap { $0 }.joined(separator: " · ")
-        panel.present(source: source, question: question, index: index, total: request.questions.count,
-                      activation: config.panelActivation)
+        panel.present(source: request.source, title: request.title, question: question, index: index,
+                      total: request.questions.count, activation: config.panelActivation)
         let language = SpokenText.language(of: question.question)
         let text = SpokenText.build(question: question, index: index, total: request.questions.count, language: language,
                                     speakOptions: config.speakOptions, speakDescriptions: config.speakOptionDescriptions)
@@ -186,13 +189,13 @@ final class QuestionSession: QuestionPanelDelegate {
         retriedStart = false
         warnedStart = false
         noSpeech = false
+        heardSpeech = false
         typedAt = nil
         pendingAnswer = nil
         manualSelection = []
         vad = VoiceActivityDetector(settings: .init(config.vad))
         panel.setAnswerText("")
         panel.setSelectedOptions([])
-        panel.setPreview(nil)
         panel.setButtons(sendEnabled: true)
 
         micImmediate = voiceInput && (config.micStart == .immediately || (config.micStart == .auto && AudioSystem.outputIsPrivate()))
@@ -202,8 +205,8 @@ final class QuestionSession: QuestionPanelDelegate {
         if config.focus == .immediately { panel.takeKeyboard() }
 
         phase = .speaking
-        panel.setStatus(L("질문 읽는 중", "Reading"))
-        panel.setHint(idleHint)
+        panel.setState(.reading)
+        panel.setNotice(nil)
         if micImmediate { wantsWisprStart = true }
 
         guard config.speakQuestions, let text, !text.isEmpty else { return speechFinished() }
@@ -225,28 +228,24 @@ final class QuestionSession: QuestionPanelDelegate {
         listenStart = Date()
         vad.arm(at: ProcessInfo.processInfo.systemUptime)
         guard voiceInput else {
-            panel.setStatus(L("입력 대기", "Waiting"))
-            panel.setHint(L("Wispr Flow가 꺼져 있어요 · 클릭해서 직접 입력", "Wispr Flow is not running · click to type"))
+            panel.setState(.unavailable)
+            panel.setNotice(question.options.isEmpty
+                ? L("Wispr Flow가 꺼져 있어요 · 직접 입력하세요", "Wispr Flow is not running · type your answer")
+                : L("Wispr Flow가 꺼져 있어요 · 클릭하거나 직접 입력하세요", "Wispr Flow is not running · click or type"))
             return
         }
         if !wisprStarted { wantsWisprStart = true }
-        panel.setStatus(L("듣는 중…", "Listening…"))
+        if !warnedStart { panel.setState(heardSpeech ? .hearing : .listening) }
         if !vadActive {
             // Without the microphone level there is no way to hear the answer end; Return does it.
             panel.takeKeyboard()
-            panel.setHint(L("말을 마치면 Enter · Esc 건너뛰기", "Press Return when done · Esc to skip"))
+            if !warnedStart { panel.setNotice(L("말을 마치면 Return을 누르세요", "Press Return when you are done")) }
         }
     }
 
     /// Spoken prompts follow the question's language rather than the system's.
     private func spoken(_ korean: String, _ english: String) -> String {
         SpokenText.language(of: question.question) == "ko" ? korean : english
-    }
-
-    private var idleHint: String {
-        question.options.isEmpty
-            ? L("말로 답하세요 · 클릭해서 직접 입력", "Answer by voice · click to type")
-            : L("말로 답하거나 항목을 클릭", "Answer by voice or click an option")
     }
 
     private func relisten(prompt: String?) {
@@ -286,8 +285,8 @@ final class QuestionSession: QuestionPanelDelegate {
         transcribeStart = Date()
         typedAt = nil
         panel.setLevel(nil)
-        panel.setStatus(L("받아쓰는 중…", "Transcribing…"))
-        panel.setHint("")
+        panel.setState(.transcribing)
+        panel.setNotice(nil)
         // Wispr pastes into whatever has the keyboard, so take it before the dictation ends.
         panel.takeKeyboard()
     }
@@ -329,13 +328,8 @@ final class QuestionSession: QuestionPanelDelegate {
         case .confirming:
             pollPendingPaste(now)
             guard phase == .confirming else { break }
-            let remaining = confirmDeadline.timeIntervalSince(now)
-            if remaining <= 0 {
-                commitPending()
-            } else {
-                panel.setHint(L("\(Int(remaining.rounded(.up)))초 뒤 전송 · Enter 바로 · Esc 수정 · ⌘R 다시",
-                                "Sending in \(Int(remaining.rounded(.up)))s · Return now · Esc edit · ⌘R redo"))
-            }
+            // The ring around the send button shows the time left.
+            if now >= confirmDeadline { commitPending() }
         case .editing:
             pollPendingPaste(now)
             // Nobody is coming back to this one; hand it to the app's own dialog.
@@ -357,6 +351,12 @@ final class QuestionSession: QuestionPanelDelegate {
         guard wisprStarted, !wisprStopped else { return }
         let recording = WisprController.isRecording
         if recording {
+            if warnedStart, !sawRecording {
+                // It was only slow to start.
+                warnedStart = false
+                panel.setState(phase == .speaking ? .reading : (heardSpeech ? .hearing : .listening))
+                panel.setNotice(nil)
+            }
             sawRecording = true
         } else if sawRecording {
             // Stopped by the user (fn key, Esc) or by Wispr itself.
@@ -373,8 +373,9 @@ final class QuestionSession: QuestionPanelDelegate {
             } else if waited > 3.5, !warnedStart {
                 warnedStart = true
                 Log.info("session \(request.id): wispr did not start recording")
-                panel.setHint(L("Wispr Flow가 녹음을 시작하지 못했어요 · 직접 입력하거나 클릭하세요",
-                                "Wispr Flow did not start recording · type or click instead"))
+                panel.setState(.unavailable)
+                panel.setNotice(L("Wispr Flow가 녹음을 시작하지 못했어요 · 클릭하거나 직접 입력하세요",
+                                  "Wispr Flow did not start recording · click or type instead"))
             }
         }
     }
@@ -417,14 +418,15 @@ final class QuestionSession: QuestionPanelDelegate {
 
     private func handleLevel(_ level: Double) {
         guard phase == .speaking || phase == .listening else { return }
-        panel.setLevel(level)
         // On speakers the question itself would count as speech, so only listen once it is over.
         if phase == .speaking, !micImmediate { return }
+        panel.setLevel(level)
         guard let event = vad.feed(levelDb: level, at: ProcessInfo.processInfo.systemUptime) else { return }
         switch event {
         case .speechStarted:
             if phase == .speaking { speaker.stop() } // barge-in
-            panel.setStatus(L("듣는 중… 말씀하세요", "Listening… go on"))
+            heardSpeech = true
+            if !warnedStart { panel.setState(.hearing) }
         case .endOfSpeech:
             endListening(reason: "silence")
         case .maxDuration:
@@ -472,12 +474,11 @@ final class QuestionSession: QuestionPanelDelegate {
     private func confirm(_ answer: AnsweredQuestion?) {
         guard let answer else { return handleEmpty() }
         pendingAnswer = answer
-        panel.setPreview(answer.kind == .freeText ? nil : "→ " + answer.answer)
-        panel.setStatus(L("확인", "Confirm"))
         panel.takeKeyboard()
         guard config.autoSendDelaySeconds > 0 else { return commit(answer) }
         phase = .confirming
         confirmDeadline = Date().addingTimeInterval(config.autoSendDelaySeconds)
+        panel.setState(.confirming(seconds: config.autoSendDelaySeconds))
     }
 
     private func commitPending() {
@@ -504,8 +505,8 @@ final class QuestionSession: QuestionPanelDelegate {
         phase = .editing
         editingSince = Date()
         panel.setLevel(nil)
-        panel.setStatus(L("직접 입력", "Typing"))
-        panel.setHint(L("Enter 전송 · ⌘R 다시 말하기 · Esc 건너뛰기", "Return to send · ⌘R to speak again · Esc to skip"))
+        panel.setState(.editing)
+        panel.setNotice(nil)
     }
 
     /// The answer as it stands in the panel: typed text first, clicked options otherwise.
@@ -550,29 +551,35 @@ final class QuestionSession: QuestionPanelDelegate {
         }
     }
 
+    func panelDidSkip() {
+        guard [.speaking, .listening, .transcribing, .confirming, .editing].contains(phase) else { return }
+        finish(.skipped("user"))
+    }
+
     func panelDidRequestRetry() {
         guard phase == .confirming || phase == .editing || phase == .transcribing else { return }
         relisten(prompt: nil)
     }
 
-    func panelDidPickOption(_ index: Int) {
+    func panelDidPickOption(_ index: Int, collecting: Bool) {
         guard question.options.indices.contains(index),
               [.speaking, .listening, .transcribing, .confirming, .editing].contains(phase) else { return }
-        guard question.multiSelect else {
-            if let answer = AnswerResolver.answered(resolved: .options([index]), transcript: "", question: question) { commit(answer) }
-            return
+        switch OptionPick.resolve(index: index, collecting: collecting, multiSelect: question.multiSelect, selection: manualSelection) {
+        case .send(let indices):
+            if let answer = AnswerResolver.answered(resolved: .options(indices), transcript: "", question: question) { commit(answer) }
+        case .collect(let selection):
+            // The chosen cards show the selection; Send or Return answers with it.
+            manualSelection = selection
+            panel.setSelectedOptions(selection)
+            panel.setAnswerText("")
+            enterEditing()
+            panel.takeKeyboard()
         }
-        if let position = manualSelection.firstIndex(of: index) {
-            manualSelection.remove(at: position)
-        } else {
-            manualSelection.append(index)
-        }
-        panel.setSelectedOptions(manualSelection)
-        panel.setAnswerText("")
-        let labels = manualSelection.sorted().map { question.options[$0].label }
-        panel.setPreview(labels.isEmpty ? nil : "→ " + labels.joined(separator: ", "))
-        enterEditing()
-        panel.takeKeyboard()
+    }
+
+    func panelDidClickAnswerField() {
+        // Stop the countdown: the user is about to change the answer.
+        if phase == .confirming { enterEditing() }
     }
 
     func panelDidReceivePaste(_ text: String) -> Bool {
