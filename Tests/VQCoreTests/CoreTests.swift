@@ -188,6 +188,41 @@ private func feed(_ detector: inout VoiceActivityDetector, level: Double, second
     #expect(!HookSettings.isInstalled(in: removed, agent: .claude))
 }
 
+@Test func nextStepHookGoesUnderStopWithoutAMatcher() throws {
+    let existing: [String: Any] = [
+        "hooks": [
+            "Stop": [["hooks": [["type": "command", "command": "/usr/local/bin/notify"]]]],
+        ],
+    ]
+    let binary = "/Users/me/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
+    let installed = HookSettings.Agent.claudeHooks.reduce(existing) { HookSettings.install(into: $0, binaryPath: binary, agent: $1) }
+
+    let hooks = try #require(installed["hooks"] as? [String: Any])
+    #expect((hooks["PreToolUse"] as? [[String: Any]])?.count == 1)
+    let groups = try #require(hooks["Stop"] as? [[String: Any]])
+    #expect(groups.count == 2)
+    #expect(groups[1]["matcher"] == nil)
+    let entry = try #require((groups[1]["hooks"] as? [[String: Any]])?.first)
+    #expect(entry["command"] as? String == "'\(binary)' hook claude-stop")
+    #expect(entry["timeout"] as? Int == 900)
+    // The two Claude hooks are told apart, so one can be read or removed without the other.
+    #expect(HookSettings.installedCommand(in: installed, agent: .claude) == "'\(binary)' hook claude")
+    #expect(HookSettings.installedCommand(in: installed, agent: .claudeStop) == "'\(binary)' hook claude-stop")
+
+    let again = HookSettings.install(into: installed, binaryPath: binary, agent: .claudeStop)
+    #expect(((again["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]])?.count == 2)
+
+    let withoutStop = HookSettings.uninstall(from: installed, agent: .claudeStop)
+    #expect(((withoutStop["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]])?.count == 1)
+    #expect(HookSettings.isInstalled(in: withoutStop, agent: .claude))
+    #expect(!HookSettings.isInstalled(in: withoutStop, agent: .claudeStop))
+
+    let removed = HookSettings.Agent.claudeHooks.reduce(installed) { HookSettings.uninstall(from: $0, agent: $1) }
+    let removedHooks = try #require(removed["hooks"] as? [String: Any])
+    #expect(removedHooks["PreToolUse"] == nil)
+    #expect((removedHooks["Stop"] as? [[String: Any]])?.count == 1)
+}
+
 @Test func uninstallLeavesNoEmptyShells() {
     let installed = HookSettings.install(into: ["skipWorkflowUsageWarning": true], binaryPath: "/x/VoiceQuestion", agent: .claude)
     let removed = HookSettings.uninstall(from: installed, agent: .claude)

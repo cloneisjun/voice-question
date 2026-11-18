@@ -61,6 +61,155 @@ private let claudeHookInput = """
     #expect(ClaudeHook.parse(Data(#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[]}}"#.utf8)) == nil)
 }
 
+// MARK: - Claude desktop next-step box
+
+/// Transcript lines in the shape Claude Code 2.1.326 writes them, trimmed to the fields that matter.
+private enum NextStepLine {
+    static func wrapUp(_ id: String, _ input: String) -> String {
+        #"{"parentUuid":"p","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":""# + id
+            + #"","name":"mcp__ccd_turn__wrap_up","input":"# + input + #","caller":{"type":"direct"}}],"stop_reason":"tool_use"}}"#
+    }
+    static func result(_ id: String, isError: Bool = false) -> String {
+        #"{"parentUuid":"p","isSidechain":false,"type":"user","message":{"role":"user","content":[{"tool_use_id":""# + id
+            + #"","type":"tool_result","# + (isError ? #""is_error":true,"# : "")
+            + #""content":[{"type":"text","text":"Shown in the next-step box."}]}]}}"#
+    }
+    static let ask = #"{"recap":"Both PRs are approved.","ask":"How should we handle #3549's release-record binding?","actions":[{"label":"Ask the owner"},{"label":"I'll prepare it"}],"blocked":true}"#
+    static let blob = #"{"type":"api-request-blob","message":{"content":[{"type":"tool_result","tool_use_id":"x"}]}}"#
+    static let closing = #"{"isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Both PRs are approved; one decision is left."}]}}"#
+    static let summary = #"{"isSidechain":false,"type":"system","subtype":"stop_hook_summary","hookCount":3,"preventedContinuation":false}"#
+    static let human = #"{"isSidechain":false,"type":"user","message":{"role":"user","content":"Ask the owner"},"origin":{"kind":"human"}}"#
+    static let humanWithImage = #"{"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"image"},{"type":"text","text":"look"}]}}"#
+    static let enqueue = #"{"type":"queue-operation","operation":"enqueue","content":"Ask the owner"}"#
+    static let dequeue = #"{"type":"queue-operation","operation":"dequeue"}"#
+
+    static func transcript(_ lines: String...) -> String { lines.joined(separator: "\n") + "\n" }
+}
+
+@Test func nextStepHookReadsTheStopInput() throws {
+    let payload = #"{"session_id":"s-1","transcript_path":"/tmp/vq/s-1.jsonl","cwd":"/Users/me/dev/shop","permission_mode":"auto","hook_event_name":"Stop","stop_hook_active":false}"#
+    let input = try #require(ClaudeNextStep.parse(Data(payload.utf8)))
+    #expect(input.transcriptPath == "/tmp/vq/s-1.jsonl")
+    #expect(input.cwd == "/Users/me/dev/shop")
+    // Any other event, the AskUserQuestion hook's input for one, is not ours.
+    #expect(ClaudeNextStep.parse(Data(claudeHookInput.utf8)) == nil)
+    #expect(ClaudeNextStep.parse(Data("{}".utf8)) == nil)
+}
+
+@Test func nextStepBoxBecomesAQuestion() throws {
+    let text = NextStepLine.transcript(NextStepLine.human, NextStepLine.wrapUp("toolu_01H5", NextStepLine.ask), NextStepLine.result("toolu_01H5"),
+                                       NextStepLine.blob, NextStepLine.closing)
+    let ask = try #require(ClaudeNextStep.pendingAsk(inTranscript: text))
+    #expect(ask.toolUseID == "toolu_01H5")
+    #expect(ask.question == Question(question: "How should we handle #3549's release-record binding?",
+                                     options: [QuestionOption(label: "Ask the owner"), QuestionOption(label: "I'll prepare it")]))
+
+    let payload = #"{"session_id":"s-1","transcript_path":"/tmp/t.jsonl","cwd":"/Users/me/dev/clone-poc","hook_event_name":"Stop"}"#
+    let request = ClaudeNextStep.request(from: try #require(ClaudeNextStep.parse(Data(payload.utf8))), ask: ask)
+    #expect(request.id == "toolu_01H5")
+    #expect(request.source == .claudeCode)
+    #expect(request.title == "clone-poc")
+    #expect(request.questions == [ask.question])
+
+    // A question with no buttons is answered freely.
+    let open = NextStepLine.transcript(NextStepLine.wrapUp("toolu_02", #"{"recap":"Done.","ask":"Which branch next?"}"#), NextStepLine.result("toolu_02"))
+    #expect(ClaudeNextStep.pendingAsk(inTranscript: open)?.question == Question(question: "Which branch next?"))
+}
+
+@Test func nextStepBoxesThatCannotBeAnsweredByVoiceAreLeftAlone() {
+    func pending(_ input: String, isError: Bool = false) -> ClaudeNextStep.Ask? {
+        ClaudeNextStep.pendingAsk(inTranscript: NextStepLine.transcript(NextStepLine.wrapUp("toolu_1", input), NextStepLine.result("toolu_1", isError: isError),
+                                                                        NextStepLine.closing))
+    }
+    #expect(pending(NextStepLine.ask) != nil)
+    #expect(pending(NextStepLine.ask, isError: true) == nil) // the box was never shown
+    #expect(pending(#"{"recap":"All done."}"#) == nil) // nothing is asked
+    #expect(pending(#"{"recap":"All done.","ask":"  ","actions":[{"label":"OK"}]}"#) == nil)
+    // A button that makes the app do something (commit, create a pull request, …) cannot be pressed from here.
+    #expect(pending(#"{"recap":"Ready.","ask":"Commit now?","actions":[{"action":"commit"},{"label":"Not yet"}]}"#) == nil)
+    #expect(pending(#"{"recap":"Ready.","ask":"Commit now?","actions":[{"action":"commit","label":"Commit"}]}"#) == nil)
+
+    // No result recorded for the call, and a transcript that never mentions the box.
+    #expect(ClaudeNextStep.pendingAsk(inTranscript: NextStepLine.transcript(NextStepLine.wrapUp("toolu_1", NextStepLine.ask), NextStepLine.closing)) == nil)
+    #expect(ClaudeNextStep.pendingAsk(inTranscript: NextStepLine.transcript(NextStepLine.human, NextStepLine.closing)) == nil)
+    #expect(ClaudeNextStep.pendingAsk(inTranscript: "") == nil)
+}
+
+@Test func nextStepBoxIsAskedOnlyWhileItIsWaiting() {
+    let box = [NextStepLine.wrapUp("toolu_1", NextStepLine.ask), NextStepLine.result("toolu_1"), NextStepLine.closing]
+    func pending(after later: String...) -> ClaudeNextStep.Ask? {
+        ClaudeNextStep.pendingAsk(inTranscript: (box + later).joined(separator: "\n"))
+    }
+    #expect(pending() != nil)
+    #expect(pending(after: NextStepLine.dequeue, "not json", #"{"type":"custom-title"}"#) != nil)
+    // The user already replied: a clicked button, a typed message, one still in the queue.
+    #expect(pending(after: NextStepLine.human, NextStepLine.closing) == nil)
+    #expect(pending(after: NextStepLine.humanWithImage) == nil)
+    #expect(pending(after: NextStepLine.enqueue) == nil)
+    // The turn already ended once with this box, so it has been offered before.
+    #expect(pending(after: NextStepLine.summary, NextStepLine.closing) == nil)
+
+    // Only the last box of the turn counts, and a subagent's lines are not part of the turn.
+    let second = #"{"recap":"Next.","ask":"Ship it?","actions":[{"label":"Yes"},{"label":"No"}]}"#
+    #expect(pending(after: NextStepLine.wrapUp("toolu_2", second), NextStepLine.result("toolu_2"))?.question.question == "Ship it?")
+    #expect(pending(after: NextStepLine.wrapUp("toolu_2", #"{"recap":"Next."}"#), NextStepLine.result("toolu_2")) == nil)
+    let sidechain = NextStepLine.human.replacingOccurrences(of: #""isSidechain":false"#, with: #""isSidechain":true"#)
+    #expect(pending(after: sidechain) != nil)
+
+    #expect(!ClaudeNextStep.hasUserMessage(inTranscript: (box + [NextStepLine.dequeue, NextStepLine.summary, sidechain]).joined(separator: "\n")))
+    #expect(ClaudeNextStep.hasUserMessage(inTranscript: NextStepLine.enqueue + "\n"))
+    #expect(ClaudeNextStep.hasUserMessage(inTranscript: NextStepLine.closing + "\n" + NextStepLine.human))
+}
+
+@Test func nextStepAnswerMakesClaudeContinue() throws {
+    let ask = ClaudeNextStep.Ask(toolUseID: "toolu_1", question: Question(question: "Ship it?", options: [QuestionOption(label: "Yes"), QuestionOption(label: "No")]))
+    let answers = [AnsweredQuestion(question: "Ship it?", answer: "Yes", transcript: "첫 번째", kind: .option, selectedLabels: ["Yes"])]
+    let output = try #require(ClaudeNextStep.output(for: ask, answers: answers))
+    #expect(!output.contains("\n")) // one line of JSON
+    let root = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+    #expect(root["decision"] as? String == "block")
+    let reason = try #require(root["reason"] as? String)
+    #expect(reason.contains("Q: Ship it?\nA: Yes"))
+
+    #expect(ClaudeNextStep.output(for: ask, answers: []) == nil)
+    #expect(ClaudeNextStep.output(for: ask, answers: [AnsweredQuestion(question: "Ship it?", answer: " ", transcript: "", kind: .freeText, selectedLabels: [])]) == nil)
+}
+
+@Test func nextStepTranscriptIsReadFromItsEnd() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("vq-next-step-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let path = directory.appendingPathComponent("session.jsonl").path
+
+    let old = (0..<200).map { #"{"type":"assistant","message":{"content":[{"type":"text","text":"한글 줄 \#($0)"}]}}"# }.joined(separator: "\n") + "\n"
+    let turn = NextStepLine.transcript(NextStepLine.human, NextStepLine.wrapUp("toolu_9", NextStepLine.ask), NextStepLine.result("toolu_9"), NextStepLine.closing)
+    try Data((old + turn).utf8).write(to: URL(fileURLWithPath: path))
+
+    #expect(ClaudeNextStep.transcriptTail(atPath: path) == old + turn)
+    // A short tail starts on a whole line, even when the cut lands inside a character.
+    for extra in 0..<4 {
+        let tail = try #require(ClaudeNextStep.transcriptTail(atPath: path, maxBytes: turn.utf8.count + 30 + extra))
+        #expect(tail == turn)
+        #expect(ClaudeNextStep.pendingAsk(inTranscript: tail)?.toolUseID == "toolu_9")
+    }
+    #expect(ClaudeNextStep.transcriptTail(atPath: directory.appendingPathComponent("missing.jsonl").path) == nil)
+
+    // While the question is asked, only whole new lines are looked at.
+    let size = UInt64((old + turn).utf8.count)
+    #expect(ClaudeNextStep.transcriptLines(atPath: path, after: size) == nil)
+    let handle = try #require(FileHandle(forWritingAtPath: path))
+    defer { try? handle.close() }
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data((NextStepLine.dequeue + "\n" + NextStepLine.enqueue.prefix(20)).utf8))
+    let first = try #require(ClaudeNextStep.transcriptLines(atPath: path, after: size))
+    #expect(first.text == NextStepLine.dequeue + "\n")
+    #expect(!ClaudeNextStep.hasUserMessage(inTranscript: first.text))
+    try handle.write(contentsOf: Data((NextStepLine.enqueue.dropFirst(20) + "\n").utf8))
+    let second = try #require(ClaudeNextStep.transcriptLines(atPath: path, after: first.end))
+    #expect(second.text == NextStepLine.enqueue + "\n")
+    #expect(ClaudeNextStep.hasUserMessage(inTranscript: second.text))
+}
+
 // MARK: - Codex hook
 
 @Test func codexHookParsesAsyncQuestionShape() throws {

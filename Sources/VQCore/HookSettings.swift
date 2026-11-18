@@ -4,16 +4,30 @@ import Foundation
 ///
 /// Claude Code (`settings.json`) and Codex (`hooks.json`) share the shape
 /// `{"hooks": {"PreToolUse": [{"matcher": "...", "hooks": [{"type": "command", "command": "..."}]}]}}`.
+/// The Claude next-step hook sits under `Stop` instead, where there is no matcher.
 /// Everything that is not ours is left exactly as it was.
 public enum HookSettings {
 
     public enum Agent: String {
         case claude, codex
+        /// Claude desktop's next-step box, read when the turn ends (`ClaudeNextStep`).
+        case claudeStop = "claude-stop"
 
-        public var matcher: String {
+        /// The hooks that go into a Claude Code `settings.json`.
+        public static let claudeHooks: [Agent] = [.claude, .claudeStop]
+
+        public var event: String {
+            switch self {
+            case .claude, .codex: return "PreToolUse"
+            case .claudeStop: return "Stop"
+            }
+        }
+
+        public var matcher: String? {
             switch self {
             case .claude: return "AskUserQuestion"
             case .codex: return "^request_user_input(_async)?$"
+            case .claudeStop: return nil
             }
         }
 
@@ -37,7 +51,7 @@ public enum HookSettings {
     }
 
     public static func installedCommand(in settings: [String: Any], agent: Agent) -> String? {
-        let groups = ((settings["hooks"] as? [String: Any])?["PreToolUse"] as? [[String: Any]]) ?? []
+        let groups = ((settings["hooks"] as? [String: Any])?[agent.event] as? [[String: Any]]) ?? []
         for group in groups {
             for hook in (group["hooks"] as? [[String: Any]]) ?? [] {
                 if let command = hook["command"] as? String, isOurs(command, agent: agent) { return command }
@@ -49,23 +63,24 @@ public enum HookSettings {
     public static func install(into settings: [String: Any], binaryPath: String, agent: Agent) -> [String: Any] {
         var result = uninstall(from: settings, agent: agent)
         var hooks = (result["hooks"] as? [String: Any]) ?? [:]
-        var groups = (hooks["PreToolUse"] as? [[String: Any]]) ?? []
-        groups.append([
-            "matcher": agent.matcher,
+        var groups = (hooks[agent.event] as? [[String: Any]]) ?? []
+        var group: [String: Any] = [
             "hooks": [[
                 "type": "command",
                 "command": command(binaryPath: binaryPath, agent: agent),
                 "timeout": timeoutSeconds,
             ] as [String: Any]],
-        ])
-        hooks["PreToolUse"] = groups
+        ]
+        if let matcher = agent.matcher { group["matcher"] = matcher }
+        groups.append(group)
+        hooks[agent.event] = groups
         result["hooks"] = hooks
         return result
     }
 
     public static func uninstall(from settings: [String: Any], agent: Agent) -> [String: Any] {
         var result = settings
-        guard var hooks = result["hooks"] as? [String: Any], let groups = hooks["PreToolUse"] as? [[String: Any]] else { return result }
+        guard var hooks = result["hooks"] as? [String: Any], let groups = hooks[agent.event] as? [[String: Any]] else { return result }
 
         var kept: [[String: Any]] = []
         for var group in groups {
@@ -82,9 +97,9 @@ public enum HookSettings {
             }
         }
         if kept.isEmpty {
-            hooks.removeValue(forKey: "PreToolUse")
+            hooks.removeValue(forKey: agent.event)
         } else {
-            hooks["PreToolUse"] = kept
+            hooks[agent.event] = kept
         }
         if hooks.isEmpty {
             result.removeValue(forKey: "hooks")

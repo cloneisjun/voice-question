@@ -44,13 +44,13 @@ cd voice-question
 
 1. Builds a release and installs it as `~/Applications/VoiceQuestion.app`
 2. Registers a login item (LaunchAgent `com.cloneisjun.voicequestion`) and starts the app
-3. Adds the Claude Code hook to `~/.claude/settings.json` (the existing file is backed up as `*.voicequestion.bak`)
+3. Adds two Claude Code hooks to `~/.claude/settings.json`: one for `AskUserQuestion`, one for the next-step box in Claude desktop (the existing file is backed up as `*.voicequestion.bak`)
 
-Options: `--no-hooks`, `--no-login-item`, `--settings FILE` (also add the hook to another Claude Code settings file), `--codex-hook` (experimental Codex hook).
+Options: `--no-hooks`, `--no-login-item`, `--settings FILE` (also add the hooks to another Claude Code settings file), `--codex-hook` (experimental Codex hook).
 
 When macOS asks for microphone access after the install, click **Allow**. VoiceQuestion only measures the input level to notice when you have finished speaking; it does not record or store audio. It also works without the permission, but then you press Return when you finish speaking. If you do not press Return within 45 seconds, it goes ahead with whatever has been transcribed so far, or skips if there is nothing.
 
-> Claude Code sessions that are already open do not pick up the hook. Start a new session.
+> Claude Code sessions that are already open do not pick up the hooks. Start a new session.
 
 A handy alias:
 
@@ -62,7 +62,7 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 
 | # | Try this | Expected result |
 |---|---|---|
-| 1 | `vq doctor` | App running, Wispr Flow running, microphone permission granted, Claude Code hook installed |
+| 1 | `vq doctor` | App running, Wispr Flow running, microphone permission granted, both Claude hooks installed |
 | 2 | Menu bar icon → **Ask a test question** (or `vq test`), then say "Pasta" ("파스타") | You hear the question, Wispr Flow starts, it stops about 1.6 seconds after you stop talking, and after a 2-second confirmation an "Answer: Pasta" message appears |
 | 3 | Same question, say "the second one" or "number two" ("두 번째", "2번") | The second option is selected |
 | 4 | Same question, say "skip" ("건너뛰기") | A "Skipped" message (with a real agent, its own question dialog appears) |
@@ -120,7 +120,8 @@ Return send · Shift-Return new line · Esc edit during the countdown, otherwise
 | App | Detecting the question | Delivering the answer | Status |
 |---|---|---|---|
 | **Claude Code** (CLI, SDK, IDE) | `PreToolUse` hook (`AskUserQuestion`) | The hook returns the answer, so Claude continues without showing its dialog | Supported |
-| **Claude desktop: Code tab** | Same hook (`~/.claude/settings.json`) | Same | Expected to work, not verified |
+| **Claude desktop: Code tab** | Same hook (`~/.claude/settings.json`) | Same | Supported |
+| **Claude desktop: next-step box** (the card with reply buttons at the end of a turn) | `Stop` hook that reads the session transcript | Claude continues with your answer as hook feedback | Only when the box asks a question and every button is a reply; a box with Commit or Create PR is left to the app. Not yet watched in the app itself |
 | **Claude desktop: Chat / Cowork** | No way | No way | Not supported |
 | **ChatGPT desktop (Codex)** | Session log watcher (`request_user_input`) | Copies the answer to the clipboard and opens the thread; you press ⌘V | Reading and dictation are automatic, pasting is manual. Not yet verified with a live question |
 | **Aside** | Daemon log watcher | Copies the answer to the clipboard; you press ⌘V | Reading and dictation are automatic, pasting is manual. Not yet verified with a live question |
@@ -247,6 +248,7 @@ Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRI
 - **On speakers, the spoken question leaks into the dictation**: with the default (`micStart: auto`) the microphone opens only after the question when you are on speakers. If you changed it to `immediately`, change it back
 - **Wispr Flow is not running**: only the panel appears, and it skips after 45 seconds (use the app's own question dialog)
 - **Nothing happens in Claude Code**: check that you started a new session, run `vq hooks status`, and make sure the app is running. When the app is not running, the hook quietly steps aside and the usual question dialog appears
+- **The box at the end of a turn in Claude desktop is not read aloud**: `vq hooks status` should list `claude-stop`; sessions that were open before the hook was installed need a restart. The box is read only when it asks a question and all its buttons are replies. After you answer, Claude desktop may show the stop hook as having "reported a problem"; that is how the answer is delivered
 
 ## Privacy
 
@@ -283,4 +285,4 @@ scripts/                build / install / uninstall / test / make-icon
 docs/assets/            Logo (logo.svg is the source, logo.png is a 512 px render) and the panel picture
 ```
 
-A single executable is both the menu bar app and the CLI. The hook (`VoiceQuestion hook claude`) passes the question to the running app over a Unix socket, waits for the answer, and prints it as JSON that Claude Code understands. If the app is not running, or you skip, it prints nothing and exits, so the agent shows its own question dialog.
+A single executable is both the menu bar app and the CLI. The hook (`VoiceQuestion hook claude`, and `hook claude-stop` for the next-step box) passes the question to the running app over a Unix socket, waits for the answer, and prints it as JSON that Claude Code understands. If the app is not running, or you skip, it prints nothing and exits, so the agent shows its own question dialog.

@@ -1,13 +1,14 @@
 # How each app is detected and answered
 
-Researched on 2026-11-17 against the versions installed on this Mac. An app update may change any of this.
+Researched on 2026-11-17 against the versions installed on this Mac; the Claude desktop next-step box was added on 2026-11-19 (Claude desktop 6.6395.0, Claude Code 2.1.326). An app update may change any of this.
 
 ## Summary
 
 | App | Question tool | Detection | Delivering the answer | Limits |
 |---|---|---|---|---|
 | Claude Code (CLI, SDK, IDE extensions) | `AskUserQuestion` | `PreToolUse` hook | `updatedInput.answers` in the hook response | None. This is the official hook contract |
-| Claude desktop: Code tab | `AskUserQuestion` | Same hook | Same | Not verified by running it |
+| Claude desktop: Code tab, question dialog | `AskUserQuestion` | Same hook | Same | Seen working in the app's sessions on 2026-11-18 |
+| Claude desktop: Code tab, next-step box | `mcp__ccd_turn__wrap_up` (`ask`, `actions`) | `Stop` hook that reads the session transcript | `decision: "block"` with the answer as the reason | Only boxes whose buttons are all replies. Checked with Claude Code 2.1.326 and a stand-in for the box, not yet in the app |
 | Claude desktop: Chat tab | (option UI) | None | None | There is no hook, and no way other than reading the screen |
 | Claude desktop: Cowork | `AskUserQuestion` | None | None | It runs inside an isolated VM, so hooks on this Mac do not run |
 | ChatGPT desktop (Codex) | `request_user_input`, `request_user_input_async` | Session log (rollout) watcher | Clipboard, and opening the thread | No public API for submitting an answer |
@@ -16,7 +17,7 @@ Researched on 2026-11-17 against the versions installed on this Mac. An app upda
 
 ## Claude Code
 
-- `VoiceQuestion hooks install` adds an entry with `matcher: "AskUserQuestion"` to `hooks.PreToolUse` in `~/.claude/settings.json`. The timeout is 900 seconds.
+- `VoiceQuestion hooks install` adds an entry with `matcher: "AskUserQuestion"` to `hooks.PreToolUse` in `~/.claude/settings.json`. The timeout is 900 seconds. (It also adds the `Stop` entry described under Claude desktop.)
 - The hook receives `tool_input.questions` on standard input and, once it has an answer, prints:
 
   ```json
@@ -30,9 +31,31 @@ Researched on 2026-11-17 against the versions installed on this Mac. An app upda
 
 ## Claude desktop
 
-- The **Code tab** runs a built-in Claude Code and appears to read the hooks in `~/.claude/settings.json`. This comes from reading the app's code, not from making it ask a question.
+- The **Code tab** runs a built-in Claude Code that reads the hooks in `~/.claude/settings.json`: `AskUserQuestion` calls from its sessions reached VoiceQuestion on 2026-11-18. It also has a second way of asking, the next-step box below, which that hook never sees.
 - The **Chat tab** has no hooks. Finding the question by reading the screen (the Accessibility API) is fragile, so it is not included.
 - **Cowork** runs its agent in an isolated VM, so a hook installed on this Mac does not run.
+
+### The next-step box
+
+At the end of a turn the Code tab shows a card with a recap, sometimes a question, and buttons ("Ask the owner", "I'll prepare it", "Commit", …). This is not `AskUserQuestion`:
+
+- The model calls the app's own tool `mcp__ccd_turn__wrap_up` with `recap`, and optionally `ask` (the question), `actions` (the buttons) and `blocked`. A button is either a reply, `{"label": "..."}`, or an app action, `{"action": "commit"}` (also `create_pr`, `merge`, `fix_ci`, …).
+- The tool returns at once ("Shown in the next-step box. …"), the model writes its closing message, and the turn ends. Clicking a reply button later sends its label as an ordinary user message.
+
+So there is no tool call to answer, and a `PreToolUse` hook on `AskUserQuestion` is never called. `VoiceQuestion hooks install` therefore adds a second entry, under `hooks.Stop` (no matcher, 900-second timeout), that runs `VoiceQuestion hook claude-stop` whenever a turn ends:
+
+1. The hook reads the last 2 MB of the session transcript (`transcript_path` in the hook input) and looks for the turn's last `wrap_up` call. In a session that never used the box this takes a few hundredths of a second and nothing else happens.
+2. It asks by voice only when the box has an `ask` and every button is a reply. The reply labels become the options. A box with an app-action button is left to the app, because a hook cannot press that button.
+3. It does nothing when the box is no longer waiting: the user already sent or queued a message after it, or the turn already ended once with this box (`stop_hook_summary` in the transcript). The same box is never asked twice.
+4. With an answer it prints `{"decision": "block", "reason": "... Q: <question>\nA: <answer>"}`. Claude Code hands the reason to the model as "Stop hook feedback" and the turn continues with the answer. Skipping, saying nothing, Pause, or the app not running print nothing: the turn ends as usual and the box stays as it is.
+5. While the question is being asked, the hook watches the transcript. If you click a button or type in the app instead, it exits and the voice panel closes.
+
+Limits:
+
+- The answer reaches the model as hook feedback, not as a message typed by you. Claude Code shows this as a stop hook that "reported a problem"; that label is how a blocking `Stop` hook is displayed, not a failure.
+- The box on screen is not updated by the hook. The reason asks the model to call `wrap_up` again when it finishes, which replaces the box.
+- The turn does not end until you answer or skip, so the session shows as working while the panel is up.
+- What the app shows while this happens has not been watched on screen yet; see [verification.md](verification.md).
 
 ## ChatGPT desktop (Codex)
 

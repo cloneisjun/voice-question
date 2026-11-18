@@ -24,7 +24,8 @@ enum CLI {
       VoiceQuestion hooks install [--settings FILE]... [--codex]
       VoiceQuestion hooks uninstall [--settings FILE]... [--codex]
       VoiceQuestion hooks status [--settings FILE]...
-      VoiceQuestion hook claude|codex    The PreToolUse hook itself (reads the hook JSON on stdin).
+      VoiceQuestion hook claude|claude-stop|codex
+                                         The hooks themselves (they read the hook JSON on stdin).
 
     ENVIRONMENT
       VQ_DISABLE=1                 Hooks do nothing (the agent shows its own dialog).
@@ -74,6 +75,16 @@ enum CLI {
                   response.status == .answered,
                   let output = ClaudeHook.output(for: parsed, answers: response.answers) else { exit(0) }
             print(output)
+        case "claude-stop":
+            guard let parsed = ClaudeNextStep.parse(input),
+                  let size = (try? FileManager.default.attributesOfItem(atPath: parsed.transcriptPath))?[.size] as? UInt64,
+                  let transcript = ClaudeNextStep.transcriptTail(atPath: parsed.transcriptPath),
+                  let pending = ClaudeNextStep.pendingAsk(inTranscript: transcript) else { exit(0) }
+            exitOnUserMessage(transcriptPath: parsed.transcriptPath, after: size)
+            guard let response = IPCClient.ask(ClaudeNextStep.request(from: parsed, ask: pending, simulateTranscripts: simulated), timeout: timeout),
+                  response.status == .answered,
+                  let output = ClaudeNextStep.output(for: pending, answers: response.answers) else { exit(0) }
+            print(output)
         case "codex":
             guard let parsed = CodexHook.parse(input), CodexHook.toolNames.contains(parsed.toolName),
                   let response = IPCClient.ask(CodexHook.request(from: parsed, simulateTranscripts: simulated), timeout: timeout),
@@ -84,6 +95,20 @@ enum CLI {
             break
         }
         exit(0)
+    }
+
+    /// Ends the hook once the user replies in the app instead (a clicked button, a typed message).
+    /// The app notices the hook is gone and drops the question.
+    private static func exitOnUserMessage(transcriptPath: String, after size: UInt64) {
+        Thread.detachNewThread {
+            var offset = size
+            while true {
+                Thread.sleep(forTimeInterval: 0.5)
+                guard let added = ClaudeNextStep.transcriptLines(atPath: transcriptPath, after: offset) else { continue }
+                if ClaudeNextStep.hasUserMessage(inTranscript: added.text) { exit(0) }
+                offset = added.end
+            }
+        }
     }
 
     // MARK: - Commands
@@ -205,12 +230,15 @@ enum CLI {
             ? L(" (이어폰: 질문과 동시에 마이크 켜짐)", " (headphones: microphone opens with the question)")
             : L(" (스피커: 질문이 끝난 뒤 마이크 켜짐)", " (speakers: microphone opens after the question)")))
 
-        let claudeSettings = defaultClaudeSettings()
-        let claude = (try? HookSettings.read(claudeSettings)).flatMap { HookSettings.installedCommand(in: $0, agent: .claude) }
+        let claudeSettings = try? HookSettings.read(defaultClaudeSettings())
+        let claude = claudeSettings.flatMap { HookSettings.installedCommand(in: $0, agent: .claude) }
         check(claude != nil, L("Claude Code 훅", "Claude Code hook"), claude ?? L("없음: VoiceQuestion hooks install", "missing: VoiceQuestion hooks install"))
         if let claude, let path = binaryPath(inCommand: claude) {
             check(FileManager.default.isExecutableFile(atPath: path), L("훅 실행 파일", "Hook binary"), path)
         }
+        let nextStep = claudeSettings.flatMap { HookSettings.installedCommand(in: $0, agent: .claudeStop) }
+        check(nextStep != nil, L("Claude 다음 단계 상자 훅", "Claude next-step box hook"),
+              nextStep ?? L("없음: VoiceQuestion hooks install", "missing: VoiceQuestion hooks install"))
         let codex = (try? HookSettings.read(codexHooksFile())).flatMap { HookSettings.installedCommand(in: $0, agent: .codex) }
         note(L("Codex 훅 (실험)", "Codex hook (experimental)"), codex ?? L("설치 안 됨 (세션 로그 감시로 동작)", "not installed (the session-log watcher is used)"))
         note(L("설정 / 로그", "Settings / log"), "\(VQ.configURL.path) / \(VQ.logURL.path)")
@@ -320,8 +348,9 @@ enum CLI {
 
     private static func hooks(_ arguments: [String]) -> Never {
         let explicit = value(after: "--settings", in: arguments).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-        var targets: [(url: URL, agent: HookSettings.Agent)] = (explicit.isEmpty ? [defaultClaudeSettings()] : explicit).map { ($0, .claude) }
-        if arguments.contains("--codex") { targets.append((codexHooksFile(), .codex)) }
+        var targets: [(url: URL, agents: [HookSettings.Agent])] = (explicit.isEmpty ? [defaultClaudeSettings()] : explicit)
+            .map { ($0, HookSettings.Agent.claudeHooks) }
+        if arguments.contains("--codex") { targets.append((codexHooksFile(), [.codex])) }
         let binary = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).resolvingSymlinksInPath().path
 
         var failed = false
@@ -330,14 +359,15 @@ enum CLI {
             for target in targets {
                 do {
                     let current = try HookSettings.read(target.url)
-                    try HookSettings.write(HookSettings.install(into: current, binaryPath: binary, agent: target.agent), to: target.url)
-                    print("installed \(target.agent.rawValue) hook → \(target.url.path)")
+                    let updated = target.agents.reduce(current) { HookSettings.install(into: $0, binaryPath: binary, agent: $1) }
+                    try HookSettings.write(updated, to: target.url)
+                    target.agents.forEach { print("installed \($0.rawValue) hook → \(target.url.path)") }
                 } catch {
                     failed = true
                     printError("\(target.url.path): \(error)")
                 }
             }
-            if targets.contains(where: { $0.agent == .codex }) {
+            if targets.contains(where: { $0.agents.contains(.codex) }) {
                 print(L("Codex 훅은 ChatGPT 앱에서 ‘신뢰’를 눌러야 실행됩니다 (설정 → Hooks).",
                         "The Codex hook only runs once you trust it in the ChatGPT app (Settings → Hooks)."))
             }
@@ -345,22 +375,24 @@ enum CLI {
             for target in targets {
                 do {
                     let current = try HookSettings.read(target.url)
-                    guard HookSettings.isInstalled(in: current, agent: target.agent) else {
-                        print("no \(target.agent.rawValue) hook in \(target.url.path)")
-                        continue
-                    }
-                    try HookSettings.write(HookSettings.uninstall(from: current, agent: target.agent), to: target.url)
-                    print("removed \(target.agent.rawValue) hook ← \(target.url.path)")
+                    let installed = target.agents.filter { HookSettings.isInstalled(in: current, agent: $0) }
+                    target.agents.filter { !installed.contains($0) }.forEach { print("no \($0.rawValue) hook in \(target.url.path)") }
+                    guard !installed.isEmpty else { continue }
+                    try HookSettings.write(installed.reduce(current) { HookSettings.uninstall(from: $0, agent: $1) }, to: target.url)
+                    installed.forEach { print("removed \($0.rawValue) hook ← \(target.url.path)") }
                 } catch {
                     failed = true
                     printError("\(target.url.path): \(error)")
                 }
             }
         case "status":
-            if !arguments.contains("--codex") { targets.append((codexHooksFile(), .codex)) }
+            if !arguments.contains("--codex") { targets.append((codexHooksFile(), [.codex])) }
             for target in targets {
-                let command = (try? HookSettings.read(target.url)).flatMap { HookSettings.installedCommand(in: $0, agent: target.agent) }
-                print("\(target.agent.rawValue)  \(target.url.path)\n    \(command ?? "not installed")")
+                let settings = try? HookSettings.read(target.url)
+                for agent in target.agents {
+                    let command = settings.flatMap { HookSettings.installedCommand(in: $0, agent: agent) }
+                    print("\(agent.rawValue)  \(target.url.path)\n    \(command ?? "not installed")")
+                }
             }
         default:
             printError("hooks: expected install, uninstall or status")
