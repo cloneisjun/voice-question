@@ -19,7 +19,7 @@ enum CLI {
       VoiceQuestion miccheck             Measure the microphone level for three seconds.
       VoiceQuestion tts status           Show the selected TTS engine and neural voices.
       VoiceQuestion tts use system|edge  Select offline system or online neural TTS.
-      VoiceQuestion tts preview [--language ko|en] [--text TEXT] [--output FILE.mp3]
+      VoiceQuestion tts preview [--language ko|en] [--voice ONLINE_VOICE] [--text TEXT] [--output FILE.mp3]
                                          Preview TTS only (never opens a microphone).
       VoiceQuestion hooks install [--settings FILE]... [--codex]
       VoiceQuestion hooks uninstall [--settings FILE]... [--codex]
@@ -251,6 +251,11 @@ enum CLI {
             guard IPCClient.status()?.busy != true else { printError("Wait for the current question to finish."); exit(1) }
             let language = value(after: "--language", in: arguments).first ?? "ko"
             let text = value(after: "--text", in: arguments).first ?? voicePreviewText(language)
+            if let voice = value(after: "--voice", in: arguments).first {
+                guard config.tts.engine == .edge else { printError("--voice requires edge TTS."); exit(64) }
+                // Preview another voice without changing the user's saved settings.
+                config.tts.voices[language] = voice
+            }
             if let path = value(after: "--output", in: arguments).first {
                 guard config.tts.engine == .edge, let voice = config.tts.voice(for: language) else {
                     printError("Export requires edge TTS and a configured voice for \(language).")
@@ -288,7 +293,7 @@ enum CLI {
             Log.flush()
             exit(0)
         default:
-            printError("tts: expected status, use system|edge, or preview [--language ko|en] [--text TEXT] [--output FILE.mp3]")
+            printError("tts: expected status, use system|edge, or preview [--language ko|en] [--voice ONLINE_VOICE] [--text TEXT] [--output FILE.mp3]")
             exit(64)
         }
     }

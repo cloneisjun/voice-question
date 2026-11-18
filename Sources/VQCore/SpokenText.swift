@@ -26,7 +26,9 @@ public enum SpokenText {
 
         if speakOptions, !question.options.isEmpty {
             for (offset, option) in question.options.enumerated() {
-                var line = korean ? "\(offset + 1)번, \(clean(option.label))" : "\(offset + 1): \(clean(option.label))"
+                // Digits before 번 can be read as counts (한 번, 두 번). Spell out the
+                // Sino-Korean option number so both local and online engines read 일 번, 이 번.
+                var line = korean ? "\(koreanNumber(offset + 1)) 번, \(clean(option.label))" : "\(offset + 1): \(clean(option.label))"
                 if speakDescriptions, let description = option.description, !description.isEmpty {
                     line += ", " + clean(description)
                 }
@@ -37,6 +39,13 @@ public enum SpokenText {
             }
         }
         return parts.joined(separator: " ")
+    }
+
+    private static func koreanNumber(_ number: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.numberStyle = .spellOut
+        return formatter.string(from: NSNumber(value: number)) ?? String(number)
     }
 
     /// Markdown and URLs sound terrible when read out.

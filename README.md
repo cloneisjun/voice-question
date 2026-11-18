@@ -148,6 +148,7 @@ Online voices are optional. Install their runtime once (Python 3.9+ is required)
 vq tts use edge
 vq tts preview --language ko  # speech only: no panel, microphone or Wispr Flow
 vq tts preview --language en
+vq tts preview --language ko --voice ko-KR-HyunsuMultilingualNeural  # try another voice without saving
 vq tts use system            # switch back to offline speech
 ```
 
@@ -166,6 +167,8 @@ Korean defaults to `ko-KR-SunHiNeural`, English to `en-US-EmmaMultilingualNeural
 ```
 
 Other Korean choices include `ko-KR-InJoonNeural` and `ko-KR-HyunsuMultilingualNeural`; `en-US-JennyNeural` is another English choice. List current voice names with `"$HOME/Library/Application Support/VoiceQuestion/tts-venv/bin/python3" -m edge_tts --list-voices`. Online voice names go in `tts.voices`; macOS identifiers stay in the separate top-level `voices` map. An optional `tts.pythonPath` can point to your own Python environment.
+
+Korean option numbers are spoken as `일 번`, `이 번`, `삼 번` so TTS engines do not interpret them as repetition counts (`한 번`, `두 번`, `세 번`). Visible numbers and the answer labels sent back to the agent are unchanged. A different voice is a listening preference; neural synthesis alone does not guarantee natural-sounding Korean.
 
 If online synthesis fails, times out, or has no configured voice for the question's language, the question uses the offline macOS voice. Cancelling or answering a question stops synthesis and playback. Generated audio lives in a private temporary directory and is removed after playback or cancellation. For a sample you want to keep, `vq tts preview --language ko --output sample.mp3` exports without playing audio or opening a microphone; existing files are never overwritten.
 

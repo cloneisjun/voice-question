@@ -41,7 +41,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                         player.volume = Float(min(max(volume, 0), 1))
                         self.player = player
                         guard player.prepareToPlay(), player.play() else { throw NeuralSpeechRenderer.Failure.failed }
-                        Log.info("tts: edge playback started")
+                        Log.info("tts: edge playback started voice=\(voice)")
                     } catch {
                         self.cleanUpAudio()
                         self.speakSystem(text, language: language, rate: rate, volume: volume, voiceIdentifier: voiceIdentifier)
@@ -63,7 +63,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         let scaled = AVSpeechUtteranceDefaultSpeechRate * Float(rate)
         utterance.rate = min(max(scaled, AVSpeechUtteranceMinimumSpeechRate), AVSpeechUtteranceMaximumSpeechRate)
         utterance.volume = Float(min(max(volume, 0), 1))
-        Log.info("tts: system playback started")
+        Log.info("tts: system playback started voice=\(utterance.voice?.identifier ?? "default")")
         synthesizer.speak(utterance)
     }
 

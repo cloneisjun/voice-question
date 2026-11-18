@@ -209,13 +209,24 @@ private func feed(_ detector: inout VoiceActivityDetector, level: Double, second
 
 @Test func spokenTextReadsQuestionAndOptions() {
     let question = Question(question: "어떤 카드로 결제할까요", options: [QuestionOption(label: "신용카드", description: "할부 가능"), QuestionOption(label: "체크카드")])
-    #expect(SpokenText.build(question: question, index: 0, total: 1, language: "ko") == "어떤 카드로 결제할까요. 1번, 신용카드. 2번, 체크카드.")
+    #expect(SpokenText.build(question: question, index: 0, total: 1, language: "ko") == "어떤 카드로 결제할까요. 일 번, 신용카드. 이 번, 체크카드.")
     #expect(SpokenText.build(question: question, index: 0, total: 1, language: "ko", speakOptions: false) == "어떤 카드로 결제할까요.")
     #expect(SpokenText.build(question: question, index: 1, total: 2, language: "ko", speakDescriptions: true)
-        == "질문 2. 어떤 카드로 결제할까요. 1번, 신용카드, 할부 가능. 2번, 체크카드.")
+        == "질문 2. 어떤 카드로 결제할까요. 일 번, 신용카드, 할부 가능. 이 번, 체크카드.")
 
     let english = Question(question: "Which frameworks?", options: [QuestionOption(label: "React"), QuestionOption(label: "Vue")], multiSelect: true)
     #expect(SpokenText.build(question: english, index: 0, total: 1, language: "en") == "Which frameworks? 1: React. 2: Vue. You can pick more than one.")
+}
+
+@Test func koreanOptionNumbersArePositionsRatherThanCounts() {
+    let options = (1...12).map { QuestionOption(label: "항목 \($0)") }
+    let question = Question(question: "어느 항목인가요?", options: options)
+    let text = SpokenText.build(question: question, index: 0, total: 1, language: "ko")
+    #expect(text.contains("일 번, 항목 1. 이 번, 항목 2. 삼 번, 항목 3."))
+    #expect(text.contains("구 번, 항목 9. 십 번, 항목 10. 십일 번, 항목 11. 십이 번, 항목 12."))
+    // Only generated numbering changes. The question, answer labels and matching stay intact.
+    #expect(question.options[0].label == "항목 1")
+    #expect(!text.contains("1번"))
 }
 
 @Test func spokenTextDropsMarkdownAndLinks() {

@@ -2,6 +2,23 @@
 
 Latest checks on 2026-11-18 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
 
+## Korean option pronunciation and voice comparison — 2026-11-18
+
+- The real question at 23:49:48 KST used `ko-KR-SunHiNeural`: the installed app logged online synthesis at 23:49:48.944 and online playback at 23:49:50.290, with no offline fallback. It was cancelled at 23:49:58.898 when the CLI client disconnected, so this was not a completed dictation test. The user reported that the voice still sounded awkward and that numbered options sounded like repetition counts.
+- Generated Korean option numbers now use explicit Sino-Korean words: `일 번`, `이 번`, `삼 번`, through `십이 번` in the regression case. Both online and offline engines receive this text. Labels, displayed option numbers and answer matching are unaffected. This fixes the ambiguous TTS input; actual pronunciation and perceived naturalness still require listening.
+- `tts preview --voice ONLINE_VOICE` tries an online voice without saving it. Three samples were exported with the same text and rate 1.0, using the release CLI. They opened successfully in `AVAudioPlayer` and `afinfo` (mono, 24 kHz, 48 kbps). No panel, microphone or Wispr Flow was started, and the samples were not audibly reviewed by the agent:
+
+  | File in `build/voice-preview/` | Voice | Duration |
+  | --- | --- | --- |
+  | `sunhi-numbered-ko.mp3` | `ko-KR-SunHiNeural` | 13.248 s |
+  | `hyunsu-numbered-ko.mp3` | `ko-KR-HyunsuMultilingualNeural` | 12.768 s |
+  | `injoon-numbered-ko.mp3` | `ko-KR-InJoonNeural` | 16.224 s |
+
+  Text: 오늘 저녁으로 무엇을 드시고 싶으세요? 일 번, 파스타. 이 번, 초밥. 삼 번, 샐러드. 원하는 메뉴를 말씀해 주세요.
+
+- Hyunsu's first export failed or timed out; one retry succeeded. Voice availability is not guaranteed. The saved engine remains online and the saved Korean voice remains SunHi while the user compares samples. The settings SHA-256 stayed `46fa2339643a0aa5f40b9f1da93dc393fe047c33b8468b4e8ded255b0d7621c8` throughout the previews and install.
+- `./scripts/test.sh` passed all 68 tests (49 core, 19 AppKit/subprocess). `git diff --check` and release signing verification passed. The final build and installed executable have SHA-256 `d43560fe2339a42563b04e064c534f4d79281151b8ffdf7a5f8a3b7d3a0d0fd8`. Installed with `./scripts/install.sh --no-hooks`; Claude settings SHA-256 remained `13e9dcdf4aa356a11178e36bd9ef790a77b441092312d07516543c470a984e0e`. The app is idle with both watchers running. The rebuild again reset microphone permission to `notDetermined`; a person must grant it for automatic end-of-speech detection. Voice sample playback does not need this permission.
+
 ## Configurable neural voices — 2026-11-18
 
 - New installations and old configuration files default to offline macOS TTS. The menu and `tts use system|edge` choose the engine. Online voices are opt-in and use the separately installed `edge-tts==7.3.1` Python client. Korean uses `ko-KR-SunHiNeural`, English `en-US-EmmaMultilingualNeural`; both can be changed per language. Online question text goes to Microsoft, while VoiceQuestion does not send the microphone input or dictated answer to this TTS service.
