@@ -1,6 +1,16 @@
 # Verification status
 
-Latest checks on 2026-11-18 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
+Latest checks on 2026-11-19 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
+
+## Local Qwen3-TTS — 2026-11-19
+
+- Added an optional local `qwen` engine with its own interpreter, model, preset voices, instruction and timeout settings. Default presets are Korean Sohee and English Ryan. The app bundles a cancellable Python adapter; question text crosses stdin, output is a private temporary WAV, and the worker uses Hugging Face / Transformers offline mode. Failure falls back to the system voice and is logged. The system engine remains the repository default and the online engine remains selectable.
+- Installed MLX Audio 0.4.4 in a separate Python 3.11 environment, plus the MLX 8-bit conversion of Qwen3-TTS 1.7B CustomVoice (2.9 GB on disk) on an Apple M5 Pro / 48 GB Mac. The model and dependencies are downloaded separately from the Swift app and are not committed to Git.
+- The first real offline generation took 9.313 seconds wall time including imports/model loading. Its 24 kHz, mono PCM16 WAV is 9.520 seconds, peak amplitude 0.610 and RMS 0.083. A pitch-preserving 1.5x comparison file made with FFmpeg is 6.346 seconds. Text: “오늘 저녁으로 무엇을 드시고 싶으세요? 일 번, 파스타. 이 번, 초밥. 삼 번, 샐러드.” These files were opened and inspected programmatically, not audibly reviewed for naturalness.
+- The installed app's CLI separately generated and decoded a valid 6.88-second native-speed Sohee WAV through the bundled helper. Output length can vary between model generations. Qwen exports native-speed WAV; the actual app applies `speechRate` during playback. It rejects a `.mp3` extension for Qwen exports (exit 64).
+- `./scripts/test.sh` passed all 70 tests (50 core / 20 AppKit), including separate Qwen settings, online compatibility, stdin transport, offline environment, voice/language arguments, menu selection and existing timeout/cancellation/replacement checks. Hidden UI tests did not start microphones or move the pointer.
+- Built and installed with `./scripts/install.sh --no-hooks`. The installed executable SHA-256 matches the release build (`614722e040373398246ac35476bc70a881aa0b0bb82efa16b1e49191e22dfc98`), its signature verifies, and the two watchers and Wispr Flow are running. Selected `qwen`, retaining `speechRate: 1.5`; a decoded JSON comparison confirms all prior settings were preserved except the selected engine, with Qwen defaults added. Installation initially reset microphone permission to `notDetermined`; if it is not granted, Return ends an answer manually.
+- Perceived naturalness and a real spoken answer remain for the user to assess. Full-question synthesis means a wait before playback; streaming and a persistent warm model are not implemented.
 
 ## Faster speech setting — 2026-11-18
 

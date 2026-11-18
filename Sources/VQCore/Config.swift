@@ -8,6 +8,25 @@ public struct VQConfig: Codable, Equatable {
         public enum Engine: String, Codable, CaseIterable {
             case system
             case edge
+            case qwen
+        }
+
+        public struct Qwen: Codable, Equatable {
+            public var pythonPath = ""
+            public var modelPath = "~/Library/Application Support/VoiceQuestion/qwen-model"
+            public var voices = ["ko": "Sohee", "en": "Ryan"]
+            public var instruct = "Speak naturally in a friendly conversational tone, with clear pronunciation and no exaggerated pauses."
+            public var timeoutSeconds = 120.0
+
+            public init() {}
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                pythonPath = c.value(.pythonPath, default: pythonPath)
+                modelPath = c.value(.modelPath, default: modelPath)
+                voices = c.value(.voices, default: voices)
+                instruct = c.value(.instruct, default: instruct)
+                timeoutSeconds = c.value(.timeoutSeconds, default: timeoutSeconds)
+            }
         }
 
         /// Offline by default; online synthesis is always an explicit choice.
@@ -17,6 +36,7 @@ public struct VQConfig: Codable, Equatable {
         public var timeoutSeconds = 15.0
         /// Microsoft voice names, separate from macOS voice identifiers in `voices`.
         public var voices = ["ko": "ko-KR-SunHiNeural", "en": "en-US-EmmaMultilingualNeural"]
+        public var qwen = Qwen()
 
         public init() {}
         public init(from decoder: Decoder) throws {
@@ -25,16 +45,29 @@ public struct VQConfig: Codable, Equatable {
             pythonPath = c.value(.pythonPath, default: pythonPath)
             timeoutSeconds = c.value(.timeoutSeconds, default: timeoutSeconds)
             voices = c.value(.voices, default: voices)
+            qwen = c.value(.qwen, default: qwen)
         }
 
         public var resolvedPythonPath: String {
+            if engine == .qwen {
+                let path = qwen.pythonPath.isEmpty ? "~/Library/Application Support/VoiceQuestion/qwen-venv/bin/python3" : qwen.pythonPath
+                return (path as NSString).expandingTildeInPath
+            }
             if !pythonPath.isEmpty { return (pythonPath as NSString).expandingTildeInPath }
             return URL(fileURLWithPath: NSHomeDirectory())
                 .appendingPathComponent("Library/Application Support/VoiceQuestion/tts-venv/bin/python3").path
         }
 
         public func voice(for language: String) -> String? {
-            voices[language] ?? voices[String(language.prefix(2))]
+            let names = engine == .qwen ? qwen.voices : voices
+            return names[language] ?? names[String(language.prefix(2))]
+        }
+
+        public var runtimeAvailable: Bool {
+            if engine == .system { return true }
+            guard FileManager.default.isExecutableFile(atPath: resolvedPythonPath) else { return false }
+            return engine != .qwen || FileManager.default.fileExists(atPath:
+                ((qwen.modelPath as NSString).expandingTildeInPath as NSString).appendingPathComponent("config.json"))
         }
     }
 

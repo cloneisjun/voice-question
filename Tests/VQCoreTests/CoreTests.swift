@@ -138,6 +138,17 @@ private func feed(_ detector: inout VoiceActivityDetector, level: Double, second
     #expect(try JSONDecoder().decode(VQConfig.self, from: JSONEncoder().encode(partial)) == partial)
 }
 
+@Test func qwenSettingsStaySeparateFromOnlineVoices() throws {
+    let config = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"tts":{"engine":"qwen","pythonPath":"/edge/python","qwen":{"pythonPath":"/local/python","voices":{"ko":"Sohee"}}}}"#.utf8))
+    #expect(config.tts.engine == .qwen)
+    #expect(config.tts.resolvedPythonPath == "/local/python")
+    #expect(config.tts.voice(for: "ko-KR") == "Sohee")
+    #expect(config.tts.voice(for: "fr") == nil)
+    #expect(config.tts.qwen.timeoutSeconds == 120)
+    let saved = try JSONEncoder().encode(config)
+    #expect(try JSONDecoder().decode(VQConfig.self, from: saved) == config)
+}
+
 // MARK: - Hook settings
 
 @Test func installKeepsExistingSettings() throws {

@@ -238,7 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let voiceItem = NSMenuItem(title: L("질문 음성", "Question voice"), action: nil, keyEquivalent: "")
         let voiceMenu = NSMenu()
         for (engine, title) in [(VQConfig.TTS.Engine.system, L("이 Mac에서 · 오프라인", "On this Mac · Offline")),
-                                (.edge, L("신경망 음성 · Microsoft 온라인", "Neural voice · Microsoft online"))] {
+                                (.edge, L("신경망 음성 · Microsoft 온라인", "Neural voice · Microsoft online")),
+                                (.qwen, L("Qwen3-TTS · 이 Mac에서", "Qwen3-TTS · Local on this Mac"))] {
             let item = NSMenuItem(title: title, action: #selector(selectVoiceEngine(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = engine.rawValue
@@ -284,9 +285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func selectVoiceEngine(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let engine = VQConfig.TTS.Engine(rawValue: raw) else { return }
         var config = VQConfig.load()
-        if engine == .edge, !FileManager.default.isExecutableFile(atPath: config.tts.resolvedPythonPath) {
-            Toast.show(L("온라인 음성 설치가 필요해요 · README의 Question voices를 확인하세요",
-                         "Install online voices first · see Question voices in the README"))
+        config.tts.engine = engine
+        if !config.tts.runtimeAvailable {
+            Toast.show(L("음성 설치가 필요해요 · README의 Question voices를 확인하세요",
+                         "Install the voice runtime first · see Question voices in the README"))
             return
         }
         previewSpeaker.stop()

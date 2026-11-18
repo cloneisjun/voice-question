@@ -11,6 +11,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     private var utterance: AVSpeechUtterance?
     private var completion: (() -> Void)?
     private var generation = UUID()
+    private var playingEngine = ""
 
     override init() {
         super.init()
@@ -25,9 +26,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         stop()
         self.completion = completion
         let token = generation
-        if settings.engine == .edge, let voice = settings.voice(for: language) {
-            Log.info("tts: edge synthesis voice=\(voice)")
-            renderer.render(text, voice: voice, rate: rate, settings: settings) { [weak self] result in
+        if settings.engine != .system, let voice = settings.voice(for: language) {
+            let engine = settings.engine.rawValue
+            Log.info("tts: \(engine) synthesis voice=\(voice)")
+            renderer.render(text, voice: voice, rate: rate, settings: settings, language: language) { [weak self] result in
                 guard let self, self.generation == token else {
                     if case .success(let url) = result { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
                     return
@@ -39,15 +41,20 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                         let player = try AVAudioPlayer(contentsOf: url)
                         player.delegate = self
                         player.volume = Float(min(max(volume, 0), 1))
+                        if settings.engine == .qwen {
+                            player.enableRate = true
+                            player.rate = Float(rate.isFinite ? min(max(rate, 0.5), 2) : 1)
+                        }
+                        self.playingEngine = engine
                         self.player = player
                         guard player.prepareToPlay(), player.play() else { throw NeuralSpeechRenderer.Failure.failed }
-                        Log.info("tts: edge playback started voice=\(voice)")
+                        Log.info("tts: \(engine) playback started voice=\(voice) duration=\(String(format: "%.2f", player.duration)) rate=\(player.rate)")
                     } catch {
                         self.cleanUpAudio()
                         self.speakSystem(text, language: language, rate: rate, volume: volume, voiceIdentifier: voiceIdentifier)
                     }
                 case .failure:
-                    Log.info("tts: edge unavailable; falling back to offline system voice")
+                    Log.info("tts: \(engine) unavailable; falling back to offline system voice")
                     self.speakSystem(text, language: language, rate: rate, volume: volume, voiceIdentifier: voiceIdentifier)
                 }
             }
@@ -126,7 +133,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async {
             guard self.player === player else { return }
-            Log.info("tts: edge playback finished success=\(flag)")
+            Log.info("tts: \(self.playingEngine) playback finished success=\(flag)")
             self.cleanUpAudio()
             self.finish()
         }

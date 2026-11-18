@@ -18,8 +18,8 @@ enum CLI {
       VoiceQuestion doctor               Check permissions, Wispr Flow and the installed hooks.
       VoiceQuestion miccheck             Measure the microphone level for three seconds.
       VoiceQuestion tts status           Show the selected TTS engine and neural voices.
-      VoiceQuestion tts use system|edge  Select offline system or online neural TTS.
-      VoiceQuestion tts preview [--language ko|en] [--voice ONLINE_VOICE] [--text TEXT] [--output FILE.mp3]
+      VoiceQuestion tts use system|edge|qwen  Select system, online or local neural TTS.
+      VoiceQuestion tts preview [--language ko|en] [--voice VOICE] [--text TEXT] [--output FILE]
                                          Preview TTS only (never opens a microphone).
       VoiceQuestion hooks install [--settings FILE]... [--codex]
       VoiceQuestion hooks uninstall [--settings FILE]... [--codex]
@@ -230,38 +230,44 @@ enum CLI {
         switch arguments.first {
         case "status":
             print("engine: \(config.tts.engine.rawValue)")
-            print("online runtime: \(FileManager.default.isExecutableFile(atPath: config.tts.resolvedPythonPath) ? "installed" : "not installed")")
-            for language in config.tts.voices.keys.sorted() { print("\(language): \(config.tts.voices[language]!)") }
+            print("runtime: \(config.tts.runtimeAvailable ? "ready" : "not installed")")
+            let voices = config.tts.engine == .qwen ? config.tts.qwen.voices : config.tts.voices
+            for language in voices.keys.sorted() { print("\(language): \(voices[language]!)") }
             exit(0)
         case "use":
             guard arguments.count == 2, let engine = VQConfig.TTS.Engine(rawValue: arguments[1]) else {
-                printError("tts use: expected system or edge")
+                printError("tts use: expected system, edge or qwen")
                 exit(64)
             }
-            guard engine != .edge || FileManager.default.isExecutableFile(atPath: config.tts.resolvedPythonPath) else {
-                printError("Install online voices first: ./scripts/setup-neural-tts.sh")
+            config.tts.engine = engine
+            guard config.tts.runtimeAvailable else {
+                printError(engine == .qwen ? "Install local voices first: ./scripts/setup-qwen-tts.sh" : "Install online voices first: ./scripts/setup-neural-tts.sh")
                 exit(1)
             }
-            config.tts.engine = engine
             guard config.save() else { printError("could not save settings"); exit(1) }
             print(engine == .edge ? "Online neural TTS selected. Question text is sent to Microsoft for speech synthesis."
-                  : "Offline system TTS selected. Question text stays on this Mac.")
+                  : "Offline \(engine.rawValue) TTS selected. Question text stays on this Mac.")
             exit(0)
         case "preview":
             guard IPCClient.status()?.busy != true else { printError("Wait for the current question to finish."); exit(1) }
             let language = value(after: "--language", in: arguments).first ?? "ko"
             let text = value(after: "--text", in: arguments).first ?? voicePreviewText(language)
             if let voice = value(after: "--voice", in: arguments).first {
-                guard config.tts.engine == .edge else { printError("--voice requires edge TTS."); exit(64) }
+                guard config.tts.engine != .system else { printError("--voice requires edge or qwen TTS."); exit(64) }
                 // Preview another voice without changing the user's saved settings.
-                config.tts.voices[language] = voice
+                if config.tts.engine == .qwen { config.tts.qwen.voices[language] = voice }
+                else { config.tts.voices[language] = voice }
             }
             if let path = value(after: "--output", in: arguments).first {
-                guard config.tts.engine == .edge, let voice = config.tts.voice(for: language) else {
-                    printError("Export requires edge TTS and a configured voice for \(language).")
+                guard config.tts.engine != .system, let voice = config.tts.voice(for: language) else {
+                    printError("Export requires edge or qwen TTS and a configured voice for \(language).")
                     exit(1)
                 }
                 let target = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                guard config.tts.engine != .qwen || target.pathExtension.lowercased() == "wav" else {
+                    printError("Local Qwen exports WAV audio; use an output ending in .wav.")
+                    exit(64)
+                }
                 guard !FileManager.default.fileExists(atPath: target.path) else {
                     printError("Output already exists: \(target.path)")
                     exit(1)
@@ -269,7 +275,7 @@ enum CLI {
                 let renderer = NeuralSpeechRenderer()
                 var done = false
                 var succeeded = false
-                renderer.render(text, voice: voice, rate: config.speechRate, settings: config.tts) { result in
+                renderer.render(text, voice: voice, rate: config.speechRate, settings: config.tts, language: language) { result in
                     defer { done = true }
                     if case .success(let url) = result {
                         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -277,10 +283,10 @@ enum CLI {
                             let audio = try AVAudioPlayer(contentsOf: url)
                             guard audio.duration > 0 else { throw NeuralSpeechRenderer.Failure.failed }
                             try FileManager.default.copyItem(at: url, to: target)
-                            print("\(target.path) (\(String(format: "%.2f", audio.duration)) seconds, \(voice))")
+                            print("\(target.path) (\(String(format: "%.2f", audio.duration)) seconds, \(voice)\(config.tts.engine == .qwen ? ", WAV at native speed; app uses speechRate" : ""))")
                             succeeded = true
                         } catch { printError("Could not export a valid audio file.") }
-                    } else { printError("Online synthesis failed or timed out. No preview exported.") }
+                    } else { printError("Synthesis failed or timed out. No preview exported.") }
                 }
                 while !done { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
                 exit(succeeded ? 0 : 1)
@@ -293,7 +299,7 @@ enum CLI {
             Log.flush()
             exit(0)
         default:
-            printError("tts: expected status, use system|edge, or preview [--language ko|en] [--voice ONLINE_VOICE] [--text TEXT] [--output FILE.mp3]")
+            printError("tts: expected status, use system|edge|qwen, or preview [--language ko|en] [--voice VOICE] [--text TEXT] [--output FILE]")
             exit(64)
         }
     }

@@ -140,6 +140,23 @@ Choose **Question voice** in the menu bar:
 |---|---|---|
 | **On this Mac · Offline** (default) | The best installed macOS voice for the question's language | No network or extra dependency. Enhanced/Premium voices sound better than the compact voices supplied with macOS. |
 | **Neural voice · Microsoft online** | Microsoft Edge neural voices through the optional [edge-tts](https://github.com/rany2/edge-tts) client | Internet required; question text is sent to Microsoft. No API key or paid account is needed by this client. |
+| **Qwen3-TTS · Local on this Mac** | Qwen3-TTS 1.7B CustomVoice, MLX 8-bit conversion; Korean Sohee / English Ryan | Apple Silicon, Python 3.11+. One model download (about 2.9 GB), then offline inference with no API fee. |
+
+For local Qwen voices, install the runtime and model once, rebuild/install the app, then select it:
+
+```sh
+./scripts/setup-qwen-tts.sh   # VQ_PYTHON=/path/to/python3.11 if needed
+./scripts/install.sh --no-hooks
+vq tts use qwen
+vq tts preview --language ko
+vq test
+```
+
+The adapter is bundled with the app; rebuilding is needed when adding Qwen to an older installation. This may cause macOS to request microphone permission again. Voice previews never open the microphone.
+
+The model is the [MLX community conversion](https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit) of [Qwen's Apache-2.0 CustomVoice model](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice), run through [MLX Audio](https://github.com/Neywa-Labs/mlx-audio). Model weights are stored in `~/Library/Application Support/VoiceQuestion/qwen-model` and the separate Python environment in `qwen-venv` alongside it. Setup uses the network; synthesis uses only the local model and sets Hugging Face / Transformers offline mode. Each request starts a bounded, cancellable worker, so model loading and generation add a wait before speech. This implementation generates the whole question before playback.
+
+Qwen uses the same `speechRate` setting, applied during playback (`0.5`–`2.0`). `vq tts preview --language ko --output sample.wav` exports **native-speed** WAV audio; the exported file does not include playback speed adjustment. `--voice Sohee` can preview a preset without saving it. Customize `tts.qwen.voices`, `tts.qwen.instruct`, `tts.qwen.modelPath`, `tts.qwen.pythonPath` or `tts.qwen.timeoutSeconds` (default 120, bounded to 300 seconds). These settings are separate from the online engine's names and interpreter. A missing model, failed generation or timeout falls back to the system voice and is identified in the log.
 
 Online voices are optional. Install their runtime once (Python 3.9+ is required), then select the engine:
 
@@ -154,7 +171,7 @@ vq tts use system            # switch back to offline speech
 
 The same preview is available as **Question voice → Preview voice only**. It is unavailable during a question, and a new question stops a menu preview. Engine changes apply from the next question. The app never switches a local user to an online engine automatically.
 
-To make speech faster, use **Open settings file** in the menu and set the top-level `"speechRate": 1.5`. This applies to both offline and online voices from the next question or voice preview; no rebuild, restart or new microphone permission is needed. `1.0` is the default speed, `1.25` is moderately faster, and `1.5` is faster still. Online synthesis accepts multipliers from `0.5` to `2.0` (values outside that range are clamped); offline voices use macOS's supported rate limits. This changes speaking speed, not the voice itself or the wait for online synthesis.
+To make speech faster, use **Open settings file** in the menu and set the top-level `"speechRate": 1.5`. This applies to all engines from the next question or voice preview; changing the rate needs no rebuild, restart or new microphone permission. `1.0` is the default speed, `1.25` is moderately faster, and `1.5` is faster still. Edge synthesis and Qwen playback accept multipliers from `0.5` to `2.0` (values outside that range are clamped); system voices use macOS's supported rate limits. This changes speaking speed, not the voice itself or the wait for synthesis.
 
 Korean defaults to `ko-KR-SunHiNeural`, English to `en-US-EmmaMultilingualNeural`. To customize online voices, add this to your settings (merge it with your other settings):
 
@@ -201,7 +218,8 @@ If online synthesis fails, times out, or has no configured voice for the questio
 | `speakQuestions` | `true` | When off, there is no sound, only the panel and the microphone |
 | `speakOptions`, `speakOptionDescriptions` | `true`, `false` | Also read the options, and their descriptions |
 | `speechRate`, `speechVolume` | `1.0` | Speaking rate multiplier, and volume (0 to 1) |
-| `tts.engine` | `system` | `system`: offline macOS voices. `edge`: optional online neural voices. Also selectable in the menu or with `vq tts use` |
+| `tts.engine` | `system` | `system`: offline macOS voices. `edge`: optional online neural voices. `qwen`: optional local Qwen3-TTS. Also selectable in the menu or with `vq tts use` |
+| `tts.qwen` | Sohee / Ryan, 120 seconds, managed model and venv | Local preset voices, style instruction, timeout and paths. See Question voices above |
 | `tts.voices`, `tts.timeoutSeconds`, `tts.pythonPath` | Korean SunHi / English Emma, `15`, managed venv | Online voice names, synthesis timeout, optional Python interpreter. See Question voices above |
 | `voices` | `{}` | A voice per language, for example `{"ko": "com.apple.voice.premium.ko-KR.Yuna"}` |
 | `autoSendDelaySeconds` | `2.0` | Time to review the transcribed answer before it is sent. `0` sends right away |

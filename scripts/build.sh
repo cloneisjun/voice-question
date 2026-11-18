@@ -13,6 +13,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/VoiceQuestion"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp Resources/qwen_tts.py "$APP/Contents/Resources/qwen_tts.py"
 
 # An ad-hoc signature changes with every build, so macOS asks for the microphone again after
 # a rebuild. Set CODESIGN_IDENTITY to a real identity to keep the grant.

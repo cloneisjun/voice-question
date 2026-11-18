@@ -1,7 +1,7 @@
 import Foundation
 import VQCore
 
-/// A single cancellable online synthesis. No question text appears in process arguments or logs.
+/// A single cancellable Edge or local Qwen synthesis. Text crosses stdin, never process arguments.
 /// All lifecycle methods and callbacks run on the main thread; only the stdin write is background.
 final class NeuralSpeechRenderer {
     enum Failure: Error {
@@ -13,13 +13,18 @@ final class NeuralSpeechRenderer {
     private var timeout: DispatchWorkItem?
     private var callback: ((Result<URL, Failure>) -> Void)?
     private var generation = UUID()
+    private let qwenHelperURL: URL?
 
-    func render(_ text: String, voice: String, rate: Double, settings: VQConfig.TTS,
+    init(qwenHelperURL: URL? = Bundle.main.url(forResource: "qwen_tts", withExtension: "py")) {
+        self.qwenHelperURL = qwenHelperURL
+    }
+
+    func render(_ text: String, voice: String, rate: Double, settings: VQConfig.TTS, language: String = "auto",
                 completion: @escaping (Result<URL, Failure>) -> Void) {
         cancel()
         let token = generation
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("vq-tts-\(UUID().uuidString)")
-        let output = directory.appendingPathComponent("speech.mp3")
+        let output = directory.appendingPathComponent(settings.engine == .qwen ? "speech.wav" : "speech.mp3")
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                      attributes: [.posixPermissions: 0o700])
@@ -34,9 +39,24 @@ final class NeuralSpeechRenderer {
         process.executableURL = URL(fileURLWithPath: settings.resolvedPythonPath)
         // Match the playback rate to the existing multiplier. Keep volume in the audio player.
         let percent = Int((((rate.isFinite ? min(max(rate, 0.5), 2) : 1) - 1) * 100).rounded())
-        process.arguments = ["-m", "edge_tts", "--file", "/dev/stdin", "--voice", voice,
-                             "--rate=\(percent >= 0 ? "+" : "")\(percent)%", "--no-progress",
-                             "--write-media", output.path]
+        if settings.engine == .qwen {
+            guard let helper = qwenHelperURL else {
+                finish(.failure(.unavailable))
+                return
+            }
+            process.arguments = [helper.path, "--model", (settings.qwen.modelPath as NSString).expandingTildeInPath,
+                                 "--speaker", voice, "--language", language, "--instruct", settings.qwen.instruct,
+                                 "--output", output.path]
+            var environment = ProcessInfo.processInfo.environment
+            environment["HF_HUB_OFFLINE"] = "1"
+            environment["TRANSFORMERS_OFFLINE"] = "1"
+            environment["TOKENIZERS_PARALLELISM"] = "false"
+            process.environment = environment
+        } else {
+            process.arguments = ["-m", "edge_tts", "--file", "/dev/stdin", "--voice", voice,
+                                 "--rate=\(percent >= 0 ? "+" : "")\(percent)%", "--no-progress",
+                                 "--write-media", output.path]
+        }
         process.standardInput = input
         process.standardOutput = FileHandle.nullDevice
         // Service errors can include the submitted text. Only log a generic failure in the caller.
@@ -65,7 +85,8 @@ final class NeuralSpeechRenderer {
             self.finish(.failure(.timedOut))
         }
         timeout = deadline
-        let seconds = settings.timeoutSeconds.isFinite ? min(max(settings.timeoutSeconds, 0.1), 60) : 15
+        let requested = settings.engine == .qwen ? settings.qwen.timeoutSeconds : settings.timeoutSeconds
+        let seconds = requested.isFinite ? min(max(requested, 0.1), settings.engine == .qwen ? 300 : 60) : 15
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: deadline)
     }
 

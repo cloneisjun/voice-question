@@ -131,13 +131,41 @@ struct NeuralSpeechTests {
         #expect(calls == 1)
     }
 
-    @Test func menuOffersBothEnginesAndPreviewWithoutShowingAWindow() throws {
+    @Test func localQwenUsesStdinAndOfflineEnvironment() async throws {
+        let (directory, base) = try runtime("""
+        import os, pathlib, sys
+        assert sys.stdin.read() == '테스트 질문; $(uname)'
+        assert os.environ['HF_HUB_OFFLINE'] == '1'
+        assert os.environ['TRANSFORMERS_OFFLINE'] == '1'
+        assert sys.argv[sys.argv.index('--speaker') + 1] == 'Sohee'
+        assert sys.argv[sys.argv.index('--language') + 1] == 'ko'
+        assert '테스트 질문' not in ' '.join(sys.argv)
+        output = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
+        assert output.suffix == '.wav'
+        output.write_bytes(b'local audio')
+        """)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = base
+        settings.engine = .qwen
+        settings.qwen.pythonPath = base.pythonPath
+        let renderer = NeuralSpeechRenderer(qwenHelperURL: directory.appendingPathComponent("helper.py"))
+        let result = await withCheckedContinuation { continuation in
+            renderer.render("테스트 질문; $(uname)", voice: "Sohee", rate: 1.5, settings: settings, language: "ko") {
+                continuation.resume(returning: $0)
+            }
+        }
+        let url = try result.get()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        #expect(try Data(contentsOf: url) == Data("local audio".utf8))
+    }
+
+    @Test func menuOffersAllEnginesAndPreviewWithoutShowingAWindow() throws {
         _ = NSApplication.shared
         let delegate = AppDelegate()
         let menu = NSMenu()
         delegate.menuNeedsUpdate(menu)
         let voices = try #require(menu.items.compactMap(\.submenu).first)
-        #expect(voices.items.compactMap { $0.representedObject as? String } == ["system", "edge"])
+        #expect(voices.items.compactMap { $0.representedObject as? String } == ["system", "edge", "qwen"])
         #expect(voices.items.filter { $0.state == .on }.count == 1)
         #expect(voices.items.last?.action != nil)
     }
