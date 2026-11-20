@@ -87,6 +87,7 @@ private func feed(_ detector: inout VoiceActivityDetector, level: Double, second
     #expect(defaults.enabled)
     #expect(defaults.micStart == .auto)
     #expect(defaults.codex.deliver == "clipboard")
+    #expect(defaults.aside.deliver == "send")
 
     let partial = #"{"micStart":"afterSpeech","autoSendDelaySeconds":0,"vad":{"endSilenceSeconds":2.5},"codex":{"deliver":"paste"},"unknownKey":1}"#
     let config = try JSONDecoder().decode(VQConfig.self, from: Data(partial.utf8))
@@ -96,7 +97,16 @@ private func feed(_ detector: inout VoiceActivityDetector, level: Double, second
     #expect(config.vad.noSpeechTimeoutSeconds == 12) // untouched default
     #expect(config.codex.deliver == "paste")
     #expect(config.codex.enabled)
-    #expect(config.aside.deliver == "clipboard")
+    #expect(config.aside.deliver == "send")
+
+    // Aside keeps its own default when only part of its section is written, and an explicit choice stays.
+    let aside = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"aside":{"enabled":false},"codex":{"enabled":false}}"#.utf8))
+    #expect(!aside.aside.enabled)
+    #expect(aside.aside.deliver == "send")
+    #expect(aside.codex.deliver == "clipboard")
+    let pinned = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"aside":{"deliver":"clipboard"}}"#.utf8))
+    #expect(pinned.aside.deliver == "clipboard")
+    #expect(pinned.aside.enabled)
 
     // A wrong type falls back to the default instead of discarding the whole file.
     let wrong = try JSONDecoder().decode(VQConfig.self, from: Data(#"{"micStart":"sometimes","speechRate":"fast","enabled":false}"#.utf8))

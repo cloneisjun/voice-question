@@ -313,3 +313,105 @@ private let rolloutBlockingAnswer = #"{"timestamp":"2026-11-17T07:04:02.100Z","t
     #expect(pending.first?.questions.first?.options.map(\.label) == ["금요일", "토요일"])
     #expect(AsideSessions.pendingQuestions(inSessionList: Data("oops".utf8)).isEmpty)
 }
+
+@Test func asideSessionStatus() {
+    let list = Data(#"{"sessions":[{"id":"a1","status":"interrupted"},{"id":"b2","status":"running"},{"id":"c3"}]}"#.utf8)
+    #expect(AsideSessions.status(ofSession: "a1", inSessionList: list) == "interrupted")
+    #expect(AsideSessions.status(ofSession: "b2", inSessionList: list) == "running")
+    #expect(AsideSessions.status(ofSession: "c3", inSessionList: list) == nil)
+    #expect(AsideSessions.status(ofSession: "zz", inSessionList: list) == nil)
+    #expect(AsideSessions.status(ofSession: "a1", inSessionList: Data("oops".utf8)) == nil)
+}
+
+@Test func asideAnswerMessage() {
+    let one = AnsweredQuestion(question: "언제 출발할까요?", answer: "금요일", transcript: "금요일", kind: .option, selectedLabels: ["금요일"])
+    let two = AnsweredQuestion(question: "Seats?", answer: "Aisle, Front", transcript: "", kind: .options, selectedLabels: ["Aisle", "Front"])
+    #expect(AsideSessions.answerMessage(for: [one]) == "Here is my answer to the question you just asked.\n\nQ: 언제 출발할까요?\nA: 금요일")
+    #expect(AsideSessions.answerMessage(for: [one, two])
+            == "Here are my answers to the questions you just asked.\n\nQ: 언제 출발할까요?\nA: 금요일\n\nQ: Seats?\nA: Aisle, Front")
+}
+
+/// Stands in for the `aside` CLI: one session that waits on a question until it is stopped.
+private final class FakeAsideCLI {
+    var calls: [[String]] = []
+    var waiting = true
+    var status = "idle"
+    /// "list", "stop" or "steer": that command fails.
+    var failing: String?
+    var steerStartsTurn = true
+    var pauses: [TimeInterval] = []
+
+    func run(_ arguments: [String]) -> Data? {
+        calls.append(arguments)
+        let command = arguments.dropFirst().first ?? ""
+        guard command != failing else { return nil }
+        switch command {
+        case "list":
+            let suspension = waiting
+                ? #","suspension":{"id":"sus_1","kind":"ask-user-question","request":{"questions":[{"question":"Q?","options":[{"label":"A"},{"label":"B"}]}]}}"#
+                : ""
+            return Data(#"{"sessions":[{"id":"ses1","status":"\#(status)"\#(suspension)},{"id":"other","status":"idle"}]}"#.utf8)
+        case "stop":
+            waiting = false
+            status = "interrupted"
+            return Data(#"{"session":{"id":"ses1","status":"interrupted"},"outcome":"stopped"}"#.utf8)
+        case "steer":
+            if steerStartsTurn { status = "running" }
+            return Data(#"{"session":{"id":"ses1","status":"interrupted"},"outcome":"steered"}"#.utf8)
+        default:
+            return nil
+        }
+    }
+
+    func send(_ message: String = "the answer", suspensionID: String = "sus_1") -> AsideSessions.SendOutcome {
+        AsideSessions.sendAnswer(message, sessionID: "ses1", suspensionID: suspensionID, pause: { self.pauses.append($0) }, run: run)
+    }
+}
+
+@Test func asideSendAnswerStopsTheSessionThenSteersIt() {
+    let cli = FakeAsideCLI()
+    #expect(cli.send("-- a message that starts with dashes") == .sent)
+    #expect(cli.calls == [
+        ["session", "list", "--json"],
+        ["session", "stop", "ses1", "--json"],
+        ["session", "steer", "ses1", "--json", "--", "-- a message that starts with dashes"],
+        ["session", "list", "--json"],
+    ])
+    #expect(cli.pauses == [0.3])
+}
+
+@Test func asideSendAnswerLeavesAQuestionAnsweredInAsideAlone() {
+    // Answered in Aside a moment ago: the session is working again and must not be stopped.
+    let answered = FakeAsideCLI()
+    answered.waiting = false
+    answered.status = "running"
+    #expect(answered.send() == .notPending)
+    #expect(answered.calls == [["session", "list", "--json"]])
+
+    // The session has moved on to another question.
+    let next = FakeAsideCLI()
+    #expect(next.send(suspensionID: "sus_0") == .notPending)
+    #expect(next.calls.count == 1)
+}
+
+@Test func asideSendAnswerNamesTheStepThatFailed() {
+    let noList = FakeAsideCLI()
+    noList.failing = "list"
+    #expect(noList.send() == .failed("session list"))
+    #expect(noList.calls.count == 1)
+
+    let noStop = FakeAsideCLI()
+    noStop.failing = "stop"
+    #expect(noStop.send() == .failed("session stop"))
+    #expect(!noStop.calls.contains { $0.contains("steer") })
+
+    let noSteer = FakeAsideCLI()
+    noSteer.failing = "steer"
+    #expect(noSteer.send() == .failed("session steer"))
+
+    // The message was accepted, but the session never left "interrupted".
+    let stuck = FakeAsideCLI()
+    stuck.steerStartsTurn = false
+    #expect(stuck.send() == .failed("no turn started"))
+    #expect(stuck.calls.filter { $0 == ["session", "list", "--json"] }.count == 9)
+}

@@ -588,6 +588,8 @@ final class Toast {
     private static var current: NSPanel?
 
     static func show(_ message: String, seconds: TimeInterval = 5) {
+        // A test instance puts nothing on screen.
+        guard VQ.environment("VQ_HEADLESS") != "1" else { return }
         current?.orderOut(nil)
 
         let label = NSTextField(wrappingLabelWithString: message)

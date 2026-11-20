@@ -1,6 +1,17 @@
 # Verification status
 
-Latest checks on 2026-11-19 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
+Latest checks on 2026-11-20 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
+
+## Answers to Aside — 2026-11-20
+
+- The user reported that clicking an answer in the panel for an Aside question did not reach Aside. The log shows the click was taken (16:46:27 KST: `answer option`, `answered answers=1`) and that delivery ran in `clipboard` mode: the answer was copied, Aside was brought forward and a message asked for ⌘V. Nothing answered the question, and the session went on only at 16:51:32, after it was answered in Aside. This was the documented clipboard behavior, not a click fault.
+- Aside answers a question card through its daemon, which accepts that call only from Aside's own signed clients; the CLI (1.26.1115) has no answer command. VoiceQuestion does not go around that. The new default, `aside.deliver: "send"`, stops the waiting session (`aside session stop`) and sends the answer as its next message (`aside session steer`). Details are in [app-support.md](app-support.md#aside).
+- Checked on a real Aside session, a throwaway one started with `aside exec` and deleted afterwards. `session stop` on the running session returned `stopped`, and the session was `interrupted` 0.3 seconds later. `session steer` after it returned `steered`; the session went `running`, then `idle`, and its answer was the text the message asked for. A second round with stop and steer 0.16 seconds apart gave the same result. A session started from the CLI cannot ask questions, so stopping a session that is waiting on a question card was not tried.
+- `./scripts/test.sh` passed all 82 tests (62 core, 20 AppKit/subprocess). New cases: the order of the CLI calls, a message that starts with dashes, a question already answered in Aside (the session is not stopped), each command failing, a message that starts no turn, the session status parser, the message text, and Aside keeping its own default when its settings section is partial.
+- The release build ran the whole path in a separate headless instance (own socket, config and log, a stand-in `aside` CLI and log folder, simulated answer): log line → question → "두 번째" → `파랑` → `list`, `stop`, `steer` with the message as one argument, `list` → `send sent`. A headless instance no longer shows toast messages, so nothing appeared on screen.
+- Installed with `./scripts/install.sh --no-hooks` while the app was idle. The installed executable matches the release build (SHA-256 `75c5a3fd56a15ced82ec865a889de5e7a356feaa6836910c06e0b4e1a33e2f93`), its signature verifies, both watchers are running and `~/.claude/settings.json` is unchanged (`bf4606ec…`). Microphone permission read `notDetermined` right after the install and `granted` two seconds later.
+- This Mac's settings file pinned `"aside": {"deliver": "clipboard"}`, so only that value was changed to `"send"`; every other key decodes as before. The setting is read for each answer, so no restart was needed.
+- Not checked: a live Aside question answered from the panel, which means how Aside shows the stopped card and whether the agent carries on from the message. The clipboard fallback was not run either, because it replaces the clipboard and brings Aside to the front.
 
 ## Claude desktop next-step box — 2026-11-19
 
@@ -99,7 +110,7 @@ Latest checks on 2026-11-19 with macOS 27.2. Earlier Wispr Flow and Claude Code 
 | The symbol panel on screen, and real clicks on it | The tests draw it offscreen and click it with synthetic events; nobody has looked at the installed panel or clicked it by hand since the change | Tests 2 and 11 in the README |
 | Automatic end-of-speech detection (microphone level) | Only the user can grant the microphone permission. The logic is covered by unit tests only | Test 2, `vq miccheck` |
 | Quality and volume of the spoken question | Only run with the sound off | Test 2 |
-| Clipboard delivery for ChatGPT and Aside, and the experimental `paste` / `resume` / `steer` | Needs a live question card. Only the parsers are unit-tested | Test 9 |
+| Clipboard delivery for ChatGPT and the experimental `paste`; sending an answer to an Aside session that is waiting on a question | Needs a live question card. The parsers and the order of Aside CLI calls are unit-tested | Tests 9 and 12 |
 | Codex `PreToolUse` hook | Runs only once the hook is trusted in the ChatGPT app | `vq hooks install --codex`, then trust it in the app |
 | Claude desktop Code tab | Checked only by reading the app's code | Test 7 in the Code tab |
 | The voice flow stops when you answer in the app | Needs a real question dialog | Answer in the original app while the voice panel is showing |

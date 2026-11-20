@@ -1,6 +1,6 @@
 # How each app is detected and answered
 
-Researched on 2026-11-17 against the versions installed on this Mac; the Claude desktop next-step box was added on 2026-11-19 (Claude desktop 6.6395.0, Claude Code 2.1.326). An app update may change any of this.
+Researched on 2026-11-17 against the versions installed on this Mac; the Claude desktop next-step box was added on 2026-11-19 (Claude desktop 6.6395.0, Claude Code 2.1.326) and sending answers to Aside on 2026-11-20 (Aside CLI 1.26.1115). An app update may change any of this.
 
 ## Summary
 
@@ -12,7 +12,7 @@ Researched on 2026-11-17 against the versions installed on this Mac; the Claude 
 | Claude desktop: Chat tab | (option UI) | None | None | There is no hook, and no way other than reading the screen |
 | Claude desktop: Cowork | `AskUserQuestion` | None | None | It runs inside an isolated VM, so hooks on this Mac do not run |
 | ChatGPT desktop (Codex) | `request_user_input`, `request_user_input_async` | Session log (rollout) watcher | Clipboard, and opening the thread | No public API for submitting an answer |
-| Aside | Its own question tool | Daemon log watcher | Clipboard | No public API for submitting an answer |
+| Aside | Its own question tool (`ask_user_question`) | Daemon log watcher | `aside session stop`, then `aside session steer` with the answer. Clipboard when that fails | The answer arrives as a message, not as the card's answer. Not yet tried on a live question |
 | Clone | `AskUserQuestion` (built-in Claude Code) | `PreToolUse` hook | `updatedInput.answers` | You have to point the installer at Clone's own settings folder |
 
 ## Claude Code
@@ -68,9 +68,20 @@ Limits:
 
 ## Aside
 
-- Bundle ID `at.studio.AsideBrowser`; the CLI is `aside`. Question requests are recorded in the daemon log, `~/.aside/logs/daemon-YYYY-MM-DD.log`.
-- VoiceQuestion watches this log and reads the question aloud, then copies the answer to the clipboard and brings Aside to the front. You paste it (⌘V) into the question yourself.
-- Experimental: `"aside": {"deliver": "steer"}` sends the answer as a message to the running session with `aside session steer`, and `"resume"` stops the session (`session stop`) and resumes it with the answer (`session resume`). Neither answers the question card. Both add to the conversation, so the card may stay on screen. If either fails, it falls back to the clipboard.
+- Bundle ID `at.studio.AsideBrowser`; the CLI is `aside`. Question requests are recorded in the daemon log, `~/.aside/logs/daemon-YYYY-MM-DD.log`. The questions themselves come from `aside session list --json`, where the session carries a `suspension` of kind `ask-user-question`.
+- VoiceQuestion watches this log and reads the question aloud. If the suspension disappears first (you answered in Aside), the voice flow stops.
+- Aside answers a question card through its daemon, which accepts that call only from Aside's own signed clients, and the CLI has no command for it. VoiceQuestion does not go around this. With `"aside": {"deliver": "send"}`, the default, the answer goes in as a message instead:
+  1. `aside session list --json`. If the question is no longer waiting, nothing is sent: stopping a session that has moved on would cut off its work.
+  2. `aside session stop <id>`. This closes the card and ends the waiting turn; the agent's question ends as interrupted.
+  3. `aside session steer <id> -- <message>`. On a stopped session this starts the next turn. The message is "Here is my answer to the question you just asked." followed by `Q:` and `A:` lines, and it appears in the conversation as your own message.
+  4. The session should leave `interrupted` within a few seconds. If it does not, or any command fails, VoiceQuestion does what `clipboard` does.
+- `"deliver": "clipboard"` copies the answer and brings Aside to the front; you paste it (⌘V) into the question yourself. It was the default until 2026-11-20. The earlier experimental values `resume` and `steer` are now read as `send`.
+
+Limits:
+
+- The card is stopped, not answered. Aside shows the turn as interrupted and the answer as a separate message.
+- Stop and steer were checked on a live session, but not on one that was waiting on a question; see [verification.md](verification.md).
+- Sessions on a remote host are not handled.
 
 ## Clone
 

@@ -59,34 +59,27 @@ enum Delivery {
 
     // MARK: - Aside
 
-    /// `mode`: "clipboard" (copy, bring Aside forward), "resume" / "steer" (via the `aside` CLI; experimental) or "none".
-    static func deliverAside(answers: [AnsweredQuestion], sessionID: String, mode: String, binary: String?) {
+    /// `mode`: "send" (through the `aside` CLI, see `AsideSessions.sendAnswer`), "clipboard" (copy, bring
+    /// Aside forward) or "none". The earlier "resume" and "steer" now mean "send".
+    static func deliverAside(answers: [AnsweredQuestion], sessionID: String, suspensionID: String, mode: String, binary: String?) {
         guard mode != "none", !answers.isEmpty else { return }
         let answerText = text(for: answers)
         Log.info("deliver aside: \(Log.redact(answerText)) mode=\(mode) session=\(sessionID)")
 
-        if mode == "resume" || mode == "steer", let binary {
-            let message = "Answer to your question (dictated by the user): " + answerText
-            DispatchQueue.global().async {
-                var delivered = false
-                if mode == "steer" {
-                    delivered = runCommand(binary, ["session", "steer", sessionID, message], timeout: 20) != nil
-                } else {
-                    _ = runCommand(binary, ["session", "stop", sessionID], timeout: 10)
-                    delivered = runCommand(binary, ["session", "resume", sessionID, message], timeout: 20) != nil
-                }
-                Log.info("deliver aside: \(mode) \(delivered ? "ok" : "failed")")
-                DispatchQueue.main.async {
-                    if delivered {
-                        Toast.show(L("Aside에 답변을 보냈어요.\n“\(answerText)”", "Answer sent to Aside.\n“\(answerText)”"))
-                    } else {
-                        copyForAside(answerText)
-                    }
+        guard ["send", "resume", "steer"].contains(mode), let binary else { return copyForAside(answerText) }
+        DispatchQueue.global().async {
+            let outcome = AsideSessions.sendAnswer(AsideSessions.answerMessage(for: answers), sessionID: sessionID, suspensionID: suspensionID) {
+                runCommand(binary, $0, timeout: 15)
+            }
+            Log.info("deliver aside: send \(outcome)")
+            DispatchQueue.main.async {
+                switch outcome {
+                case .sent: Toast.show(L("Aside에 답변을 보냈어요.\n“\(answerText)”", "Answer sent to Aside.\n“\(answerText)”"))
+                case .notPending: break
+                case .failed: copyForAside(answerText)
                 }
             }
-            return
         }
-        copyForAside(answerText)
     }
 
     private static func copyForAside(_ answerText: String) {

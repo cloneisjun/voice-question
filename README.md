@@ -73,6 +73,7 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 | 9 | Have ChatGPT desktop (Codex) ask a question | You hear the question, the answer is copied to the clipboard, and the thread opens. Press ⌘V in the question card |
 | 10 | The flow without any sound: `vq ask --question "Color?" --option Red --option Blue --simulate "the second one"` | "Blue", with no audio |
 | 11 | `vq ask --question "Toppings?" --option Cheese --option Basil --option Olives --multi --json`, then click **Basil** | `Basil` is sent at once. Run it again, ⌘-click **Cheese** and **Olives**, then press Return: `Cheese, Olives` |
+| 12 | Have Aside ask a question, then answer by voice or click an option | An "Answer sent to Aside" message appears. In Aside the question card closes, your answer appears in the conversation as a message, and the agent carries on |
 
 Menu and panel text follow the system language: Korean when Korean is your first preferred language, English otherwise. On a Korean system the menu items above read 테스트 질문 실행 (Ask a test question) and 일시 중지 (Pause). The voice follows the language of each question. The sample question is in Korean (김치찌개 / 파스타 / 샐러드) whenever Korean appears anywhere in your preferred languages, otherwise in English (Sushi / Pasta / Salad).
 
@@ -124,7 +125,7 @@ Return send · Shift-Return new line · Esc edit during the countdown, otherwise
 | **Claude desktop: next-step box** (the card with reply buttons at the end of a turn) | `Stop` hook that reads the session transcript | Claude continues with your answer as hook feedback | Only when the box asks a question and every button is a reply; a box with Commit or Create PR is left to the app. Not yet watched in the app itself |
 | **Claude desktop: Chat / Cowork** | No way | No way | Not supported |
 | **ChatGPT desktop (Codex)** | Session log watcher (`request_user_input`) | Copies the answer to the clipboard and opens the thread; you press ⌘V | Reading and dictation are automatic, pasting is manual. Not yet verified with a live question |
-| **Aside** | Daemon log watcher | Copies the answer to the clipboard; you press ⌘V | Reading and dictation are automatic, pasting is manual. Not yet verified with a live question |
+| **Aside** | Daemon log watcher | Stops the waiting session and sends your answer as its next message, through the `aside` CLI. Falls back to the clipboard (⌘V) when that fails | The question card closes as stopped and the answer shows up as a message. Checked on a live session, not yet on a live question |
 | **Clone** | Claude Code hook (its own settings folder) | The hook returns the answer | Add it yourself with `--settings` |
 
 More detail lives in three documents:
@@ -208,7 +209,7 @@ If online synthesis fails, times out, or has no configured voice for the questio
   "autoSendDelaySeconds": 2.0,
   "vad": { "endSilenceSeconds": 1.6, "noSpeechTimeoutSeconds": 12 },
   "codex": { "enabled": true, "deliver": "clipboard" },
-  "aside": { "enabled": true, "deliver": "clipboard" }
+  "aside": { "enabled": true, "deliver": "send" }
 }
 ```
 
@@ -234,7 +235,7 @@ If online synthesis fails, times out, or has no configured voice for the questio
 | `vad.enabled`, `vad.device`, `vad.speechThresholdDb`, `vad.noiseMarginDb` | `true`, `auto`, automatic, `10` | Fine-tuning for end-of-speech detection (check the levels with `vq miccheck`) |
 | `wispr.transcriptTimeoutSeconds` | `12` | How long to wait for the transcript after the microphone is turned off |
 | `codex.deliver` | `clipboard` | `clipboard` / `paste` (also presses ⌘V and Return for you; experimental, needs the Accessibility permission) / `none` (read aloud only) |
-| `aside.deliver` | `clipboard` | `clipboard` / `resume` or `steer` (delivers through the `aside` CLI; experimental) / `none` |
+| `aside.deliver` | `send` | `send`: stops the session that is waiting on the question and sends the answer as its next message with the `aside` CLI, and does what `clipboard` does when that fails. `clipboard`: copies the answer and brings Aside forward; you press ⌘V. `none`: read aloud only |
 
 Environment variables: `VQ_DISABLE=1` (turn the hook off), `VQ_SIMULATE_TRANSCRIPT=text` (answer with this text, without audio), `VQ_LOG_TRANSCRIPTS=1` (write transcripts to the log), `VQ_SOCKET` / `VQ_CONFIG` / `VQ_LOG` (a separate instance for testing).
 

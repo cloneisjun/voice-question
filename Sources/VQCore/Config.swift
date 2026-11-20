@@ -155,6 +155,23 @@ public struct VQConfig: Codable, Equatable {
         }
     }
 
+    /// The Aside watcher. Unlike ChatGPT, Aside has a CLI that can hand the answer to the session.
+    public struct Aside: Codable, Equatable {
+        public var enabled = true
+        /// "send" – close the question and send the answer to the session through the `aside` CLI
+        /// (falls back to "clipboard" when that fails);
+        /// "clipboard" – copy it and bring Aside to the front (paste with ⌘V);
+        /// "none" – read the question aloud only.
+        public var deliver = "send"
+
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = c.value(.enabled, default: enabled)
+            deliver = c.value(.deliver, default: deliver)
+        }
+    }
+
     public var enabled = true
     public var micStart = MicStart.auto
     /// Read questions aloud. Off shows the panel and opens the microphone without a sound.
@@ -180,7 +197,7 @@ public struct VQConfig: Codable, Equatable {
     public var wispr = Wispr()
     public var vad = VAD()
     public var codex = Watcher()
-    public var aside = Watcher()
+    public var aside = Aside()
 
     public init() {}
 

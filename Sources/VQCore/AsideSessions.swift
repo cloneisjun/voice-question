@@ -40,6 +40,60 @@ public enum AsideSessions {
         return pending
     }
 
+    /// `status` of one session in the output of `aside session list --json`: "running", "idle", "interrupted", …
+    public static func status(ofSession id: String, inSessionList data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        let sessions = ((root as? [String: Any])?["sessions"] as? [[String: Any]]) ?? (root as? [[String: Any]]) ?? []
+        return sessions.first { $0["id"] as? String == id }?["status"] as? String
+    }
+
+    // MARK: - Sending an answer
+
+    public enum SendOutcome: Equatable {
+        case sent
+        /// The question was no longer waiting (answered in Aside itself), so nothing was sent.
+        case notPending
+        /// Names the step that failed.
+        case failed(String)
+    }
+
+    /// The message that carries the answers into the session. It shows up in the conversation as
+    /// the user's own message, so it is kept short.
+    public static func answerMessage(for answers: [AnsweredQuestion]) -> String {
+        let lead = answers.count == 1 ? "Here is my answer to the question you just asked."
+                                      : "Here are my answers to the questions you just asked."
+        return lead + "\n\n" + answers.map { "Q: \($0.question)\nA: \($0.answer)" }.joined(separator: "\n\n")
+    }
+
+    /// Hands an answer to the session that asked.
+    ///
+    /// The `aside` CLI has no command that answers a question card (Aside accepts that only from its
+    /// own windows), so the answer goes in as a message: `session stop` closes the card and ends the
+    /// waiting turn, then `session steer` starts the next turn with the answer.
+    ///
+    /// `run` runs the CLI with the given arguments and returns its output, or nil when it failed.
+    public static func sendAnswer(_ message: String, sessionID: String, suspensionID: String,
+                                  pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) },
+                                  run: ([String]) -> Data?) -> SendOutcome {
+        // A session that has moved on (the question was answered in Aside a moment ago) must not be stopped.
+        guard let list = run(["session", "list", "--json"]) else { return .failed("session list") }
+        guard pendingQuestions(inSessionList: list).contains(where: { $0.sessionID == sessionID && $0.suspensionID == suspensionID }) else {
+            return .notPending
+        }
+        guard run(["session", "stop", sessionID, "--json"]) != nil else { return .failed("session stop") }
+        pause(0.3)
+        guard run(["session", "steer", sessionID, "--json", "--", message]) != nil else { return .failed("session steer") }
+
+        // The message starts a turn at once, which takes the session out of "interrupted".
+        for _ in 0..<8 {
+            guard let list = run(["session", "list", "--json"]),
+                  let status = status(ofSession: sessionID, inSessionList: list) else { return .sent }
+            if status != "interrupted" { return .sent }
+            pause(0.5)
+        }
+        return .failed("no turn started")
+    }
+
     private static func isMissing(_ value: Any?) -> Bool {
         value == nil || value is NSNull
     }
