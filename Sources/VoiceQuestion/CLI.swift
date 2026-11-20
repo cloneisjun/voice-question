@@ -172,7 +172,7 @@ enum CLI {
             print("""
             VoiceQuestion \(report.version)  \(report.enabled ? "enabled" : "PAUSED")\(report.busy ? "  (asking a question now)" : "")
               microphone permission : \(report.microphonePermission)
-              accessibility         : \(report.accessibilityTrusted ? "granted" : "not granted (only needed for deliver=paste)")
+              accessibility         : \(report.accessibilityTrusted ? "granted" : "not granted (needed for Aside card submission or Codex paste)")
               Wispr Flow            : \(report.wisprInstalled ? (report.wisprRunning ? "running" : "installed, not running") : "not installed")
               ChatGPT watcher       : \(report.watchers["codex"] ?? "-")
               Aside watcher         : \(report.watchers["aside"] ?? "-")
@@ -223,7 +223,7 @@ enum CLI {
                                                                     "\(report.microphonePermission): without it the end of your answer is not detected; finish with Return"))
             check(report.wisprInstalled && report.wisprRunning, "Wispr Flow",
                   report.wisprInstalled ? (report.wisprRunning ? "" : L("실행 중이 아님", "not running")) : L("설치되지 않음", "not installed"))
-            note(L("손쉬운 사용 권한", "Accessibility"), report.accessibilityTrusted ? "granted" : L("없음 (deliver=paste 실험 기능에만 필요)", "not granted (only for deliver=paste)"))
+            note(L("손쉬운 사용 권한", "Accessibility"), report.accessibilityTrusted ? "granted" : L("없음 (Aside 카드 제출 및 Codex 붙여넣기에 필요)", "not granted (needed for Aside card submission or Codex paste)"))
             note("ChatGPT / Aside", "\(report.watchers["codex"] ?? "-") / \(report.watchers["aside"] ?? "-")")
         }
         note(L("소리 출력", "Sound output"), (AudioSystem.outputName() ?? "-") + (AudioSystem.outputIsPrivate()

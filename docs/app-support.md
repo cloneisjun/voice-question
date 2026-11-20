@@ -12,7 +12,7 @@ Researched on 2026-11-17 against the versions installed on this Mac; the Claude 
 | Claude desktop: Chat tab | (option UI) | None | None | There is no hook, and no way other than reading the screen |
 | Claude desktop: Cowork | `AskUserQuestion` | None | None | It runs inside an isolated VM, so hooks on this Mac do not run |
 | ChatGPT desktop (Codex) | `request_user_input`, `request_user_input_async` | Session log (rollout) watcher | Clipboard, and opening the thread | No public API for submitting an answer |
-| Aside | Its own question tool (`ask_user_question`) | Daemon log watcher | `aside session stop`, then `aside session steer` with the answer. Clipboard when that fails | The answer arrives as a message, not as the card's answer. Not yet tried on a live question |
+| Aside | Its own question tool (`ask_user_question`) | Daemon log watcher | Card editor through Accessibility, then CLI message delivery when unavailable | An open, matching single-choice card can receive the label in its written-answer field when Accessibility is granted |
 | Clone | `AskUserQuestion` (built-in Claude Code) | `PreToolUse` hook | `updatedInput.answers` | You have to point the installer at Clone's own settings folder |
 
 ## Claude Code
@@ -70,7 +70,7 @@ Limits:
 
 - Bundle ID `at.studio.AsideBrowser`; the CLI is `aside`. Question requests are recorded in the daemon log, `~/.aside/logs/daemon-YYYY-MM-DD.log`. The questions themselves come from `aside session list --json`, where the session carries a `suspension` of kind `ask-user-question`.
 - VoiceQuestion watches this log and reads the question aloud. If the suspension disappears first (you answered in Aside), the voice flow stops.
-- Aside answers a question card through its daemon, which accepts that call only from Aside's own signed clients, and the CLI has no command for it. VoiceQuestion does not go around this. With `"aside": {"deliver": "send"}`, the default, the answer goes in as a message instead:
+- Aside answers a question card through its daemon, which accepts that call only from Aside's own signed clients, and the CLI has no command for it. VoiceQuestion does not go around this. With `"aside": {"deliver": "send"}`, VoiceQuestion first tries the open chat’s single-choice card through macOS Accessibility. It matches the chat URL, pending question, title and option labels. It writes the selected label into the card’s empty answer field and directs Return to Aside. A submission whose result is uncertain leaves the card available for inspection. When the card or permission is unavailable, the CLI delivers a message:
   1. `aside session list --json`. If the question is no longer waiting, nothing is sent: stopping a session that has moved on would cut off its work.
   2. `aside session stop <id>`. This closes the card and ends the waiting turn; the agent's question ends as interrupted.
   3. `aside session steer <id> -- <message>`. On a stopped session this starts the next turn. The message is "Here is my answer to the question you just asked." followed by `Q:` and `A:` lines, and it appears in the conversation as your own message.
@@ -79,8 +79,8 @@ Limits:
 
 Limits:
 
-- The card is stopped, not answered. Aside shows the turn as interrupted and the answer as a separate message.
-- Stop and steer were checked on a live session, but not on one that was waiting on a question; see [verification.md](verification.md).
+- The message fallback closes the card as interrupted.
+- Stop and steer were verified with a real pending card. See [verification.md](verification.md).
 - Sessions on a remote host are not handled.
 
 ## Clone

@@ -419,12 +419,15 @@ final class QuestionSession: QuestionPanelDelegate {
     private func handleLevel(_ level: Double) {
         guard phase == .speaking || phase == .listening else { return }
         // On speakers the question itself would count as speech, so only listen once it is over.
-        if phase == .speaking, !micImmediate { return }
+        if phase == .speaking, !micImmediate || speaker.isPreparingAudio { return }
         panel.setLevel(level)
         guard let event = vad.feed(levelDb: level, at: ProcessInfo.processInfo.systemUptime) else { return }
         switch event {
         case .speechStarted:
-            if phase == .speaking { speaker.stop() } // barge-in
+            if phase == .speaking {
+                Log.info("session \(request.id): speech interrupted playback")
+                speaker.stop()
+            }
             heardSpeech = true
             if !warnedStart { panel.setState(.hearing) }
         case .endOfSpeech:

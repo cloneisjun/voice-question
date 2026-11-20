@@ -2,6 +2,14 @@
 
 Latest checks on 2026-11-20 with macOS 27.2. Earlier Wispr Flow and Claude Code checks are retained below. Sound quality and checks that need a person's voice remain human checks.
 
+## Live Aside cards and missing question audio — 2026-11-20
+
+- Opened a new chat in the Aside desktop UI. At 17:28:45 KST both the native card and the installed VoiceQuestion panel showed “Which VQ41 test color?” with Cobalt and Amber. Pressed Amber in VoiceQuestion. Aside displayed a separate answer message and replied Amber.
+- After installation, the Korean question “음성 테스트입니다. 어떤 색을 고를까요?” reached the panel. Qwen synthesis started at 17:36:03.846 and playback at 17:36:10.945 (Sohee, 8.00 seconds at 1.5×). The widget's Amber click at 17:36:15.329 ended playback. The agent confirmed receiving Amber in chat after interruption. The installed app had microphone permission and lacked Accessibility permission.
+- Earlier questions started synthesis without a playback-start event. Answers can cancel synthesis, and with private output the microphone could also interrupt a question during synthesis. Microphone-triggered interruption now waits for playback. An instrumented subsequent question confirmed the microphone can still interrupt actual playback (17:36:32.773 start, 17:36:33.386 interruption). macOS reported External Headphones at 44%, unmuted. The app cannot establish what a person heard.
+- Exercised the release card submission source from a temporary Accessibility-authorized test process against the live Aside chat. The exact pending card, question and options were matched. Aside returned “VQ41: custom: Cobalt” from the question tool (17:36, suspension 0209fb1e-d884-4376-9d87-f75a350a0f07). The chosen label goes through the card’s written-answer field. The installed app used message delivery under its own permissions.
+- A microphone-free Korean preview also started and completed playback. The 62 core and 20 app tests passed. Installed executable SHA-256 matched the release build: `202a520effefcd05262078ef1773fe476d3ce8942062fe3ba3682fa69c84cd4b`.
+
 ## Answers to Aside — 2026-11-20
 
 - The user reported that clicking an answer in the panel for an Aside question did not reach Aside. The log shows the click was taken (16:46:27 KST: `answer option`, `answered answers=1`) and that delivery ran in `clipboard` mode: the answer was copied, Aside was brought forward and a message asked for ⌘V. Nothing answered the question, and the session went on only at 16:51:32, after it was answered in Aside. This was the documented clipboard behavior, not a click fault.

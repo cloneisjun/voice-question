@@ -18,7 +18,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         synthesizer.delegate = self
     }
 
-    var isSpeaking: Bool { completion != nil }
+    var isPreparingAudio: Bool { completion != nil && player == nil && utterance == nil }
 
     /// `completion` runs on the main thread once, whether the text finished or was cut off.
     func speak(_ text: String, language: String, rate: Double, volume: Double = 1, voiceIdentifier: String?,

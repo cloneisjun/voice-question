@@ -142,7 +142,7 @@ final class AsideWatcher {
                 Log.info("aside watcher: \(request.id) \(response.status.rawValue) \(response.reason ?? "")")
                 self.queue.async { self.pending.removeValue(forKey: request.id) }
                 guard response.status == .answered else { return }
-                Delivery.deliverAside(answers: response.answers, sessionID: sessionID, suspensionID: question.suspensionID,
+                Delivery.deliverAside(answers: response.answers, questions: question.questions, sessionID: sessionID, suspensionID: question.suspensionID,
                                       mode: VQConfig.load().aside.deliver, binary: binary)
             }
         }

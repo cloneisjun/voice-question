@@ -73,7 +73,7 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 | 9 | Have ChatGPT desktop (Codex) ask a question | You hear the question, the answer is copied to the clipboard, and the thread opens. Press ⌘V in the question card |
 | 10 | The flow without any sound: `vq ask --question "Color?" --option Red --option Blue --simulate "the second one"` | "Blue", with no audio |
 | 11 | `vq ask --question "Toppings?" --option Cheese --option Basil --option Olives --multi --json`, then click **Basil** | `Basil` is sent at once. Run it again, ⌘-click **Cheese** and **Olives**, then press Return: `Cheese, Olives` |
-| 12 | Have Aside ask a question, then answer by voice or click an option | An "Answer sent to Aside" message appears. In Aside the question card closes, your answer appears in the conversation as a message, and the agent carries on |
+| 12 | Have Aside ask a question, then answer by voice or click an option | With Accessibility permission and the matching single-choice chat open, the option label is submitted in the card’s written-answer field. Otherwise the agent receives the answer as a chat message. |
 
 Menu and panel text follow the system language: Korean when Korean is your first preferred language, English otherwise. On a Korean system the menu items above read 테스트 질문 실행 (Ask a test question) and 일시 중지 (Pause). The voice follows the language of each question. The sample question is in Korean (김치찌개 / 파스타 / 샐러드) whenever Korean appears anywhere in your preferred languages, otherwise in English (Sushi / Pasta / Salad).
 
@@ -125,7 +125,7 @@ Return send · Shift-Return new line · Esc edit during the countdown, otherwise
 | **Claude desktop: next-step box** (the card with reply buttons at the end of a turn) | `Stop` hook that reads the session transcript | Claude continues with your answer as hook feedback | Only when the box asks a question and every button is a reply; a box with Commit or Create PR is left to the app. Not yet watched in the app itself |
 | **Claude desktop: Chat / Cowork** | No way | No way | Not supported |
 | **ChatGPT desktop (Codex)** | Session log watcher (`request_user_input`) | Copies the answer to the clipboard and opens the thread; you press ⌘V | Reading and dictation are automatic, pasting is manual. Not yet verified with a live question |
-| **Aside** | Daemon log watcher | Stops the waiting session and sends your answer as its next message, through the `aside` CLI. Falls back to the clipboard (⌘V) when that fails | The question card closes as stopped and the answer shows up as a message. Checked on a live session, not yet on a live question |
+| **Aside** | Daemon log watcher | Attempts submission in the open single-choice card using macOS Accessibility. Otherwise stops the waiting turn and sends a chat message | Direct submission uses the card’s written-answer field. Other question types use chat. |
 | **Clone** | Claude Code hook (its own settings folder) | The hook returns the answer | Add it yourself with `--settings` |
 
 More detail lives in three documents:

@@ -61,13 +61,41 @@ enum Delivery {
 
     /// `mode`: "send" (through the `aside` CLI, see `AsideSessions.sendAnswer`), "clipboard" (copy, bring
     /// Aside forward) or "none". The earlier "resume" and "steer" now mean "send".
-    static func deliverAside(answers: [AnsweredQuestion], sessionID: String, suspensionID: String, mode: String, binary: String?) {
+    static func deliverAside(answers: [AnsweredQuestion], questions: [Question], sessionID: String, suspensionID: String, mode: String, binary: String?) {
         guard mode != "none", !answers.isEmpty else { return }
         let answerText = text(for: answers)
         Log.info("deliver aside: \(Log.redact(answerText)) mode=\(mode) session=\(sessionID)")
 
         guard ["send", "resume", "steer"].contains(mode), let binary else { return copyForAside(answerText) }
         DispatchQueue.global().async {
+            if questions.count == 1, !questions[0].multiSelect, answers.count == 1, answers[0].kind == .option {
+                func pending() -> Bool? {
+                    guard let list = runCommand(binary, ["session", "list", "--json"], timeout: 8),
+                          AsideSessions.status(ofSession: sessionID, inSessionList: list) != nil else { return nil }
+                    return AsideSessions.pendingQuestions(inSessionList: list).contains {
+                        $0.sessionID == sessionID && $0.suspensionID == suspensionID
+                    }
+                }
+                let result = AsideQuestionCard.submit(sessionID: sessionID, question: questions[0].question,
+                                                      options: questions[0].options.map(\.label), answer: answerText) {
+                    pending() == true
+                }
+                if result == .submitAttempted {
+                    for _ in 0..<8 {
+                        if pending() == false {
+                            Log.info("deliver aside: card closed after submit")
+                            return
+                        }
+                        Thread.sleep(forTimeInterval: 0.25)
+                    }
+                    Log.info("deliver aside: card submission unconfirmed")
+                    DispatchQueue.main.async {
+                        Toast.show(L("Aside 카드 제출을 확인하지 못했어요. 카드를 확인해 주세요.",
+                                     "Card submission is unconfirmed. Please check the Aside card."))
+                    }
+                    return
+                }
+            }
             let outcome = AsideSessions.sendAnswer(AsideSessions.answerMessage(for: answers), sessionID: sessionID, suspensionID: suspensionID) {
                 runCommand(binary, $0, timeout: 15)
             }
