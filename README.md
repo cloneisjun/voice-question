@@ -11,7 +11,11 @@
 
 ---
 
-When an AI agent stops to ask you something (`AskUserQuestion`), VoiceQuestion **reads the question aloud, turns on Wispr Flow dictation, turns it off when you stop talking, and passes what you said back as the answer to that question.**
+<p align="center">
+  <img src="docs/assets/panel-demo.gif" width="460" alt="VoiceQuestion reads a release checklist aloud, listens, then highlights Unit tests and Manual pass for confirmation.">
+</p>
+
+In this demo, Claude Code asks which checks to run before a release. Saying **“unit tests and the manual pass”** selects both options. You have two seconds to review the answer before VoiceQuestion sends it back.
 
 ## How it works
 
@@ -63,9 +67,9 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 | # | Try this | Expected result |
 |---|---|---|
 | 1 | `vq doctor` | App running, Wispr Flow running, microphone permission granted, both Claude hooks installed |
-| 2 | Menu bar icon → **Ask a test question** (or `vq test`), then say "Pasta" ("파스타") | You hear the question, Wispr Flow starts, it stops about 1.6 seconds after you stop talking, and after a 2-second confirmation an "Answer: Pasta" message appears |
-| 3 | Same question, say "the second one" or "number two" ("두 번째", "2번") | The second option is selected |
-| 4 | Same question, say "skip" ("건너뛰기") | A "Skipped" message (with a real agent, its own question dialog appears) |
+| 2 | Menu bar icon → **Ask a test question** (or `vq test`), then say "Pasta" | You hear the question, Wispr Flow starts, it stops about 1.6 seconds after you stop talking, and after a 2-second confirmation an "Answer: Pasta" message appears |
+| 3 | Same question, say "the second one" or "number two" | The second option is selected |
+| 4 | Same question, say "skip" | A "Skipped" message (with a real agent, its own question dialog appears) |
 | 5 | Press Esc during the 2-second confirmation, edit the text, then press Return | The edited text is delivered as the answer. ⌘R lets you speak again |
 | 6 | `vq ask --question "Deploy now?" --option Yes --option No --json` | The answer is printed as JSON (exit code 0 answered, 2 skipped) |
 | 7 | In a new Claude Code session: "Use the AskUserQuestion tool to ask me my favorite color" | The voice panel appears in place of Claude Code's question dialog, and Claude carries on with the answer you spoke |
@@ -75,7 +79,7 @@ alias vq="$HOME/Applications/VoiceQuestion.app/Contents/MacOS/VoiceQuestion"
 | 11 | `vq ask --question "Toppings?" --option Cheese --option Basil --option Olives --multi --json`, then click **Basil** | `Basil` is sent at once. Run it again, ⌘-click **Cheese** and **Olives**, then press Return: `Cheese, Olives` |
 | 12 | Have Aside ask a question, then answer by voice or click an option | With Accessibility permission and the matching single-choice chat open, the option label is submitted in the card’s written-answer field. Otherwise the agent receives the answer as a chat message. |
 
-Menu and panel text follow the system language: Korean when Korean is your first preferred language, English otherwise. On a Korean system the menu items above read 테스트 질문 실행 (Ask a test question) and 일시 중지 (Pause). The voice follows the language of each question. The sample question is in Korean (김치찌개 / 파스타 / 샐러드) whenever Korean appears anywhere in your preferred languages, otherwise in English (Sushi / Pasta / Salad).
+The menu and panel use your first preferred language if it is English or Korean, and English otherwise. The voice follows the language of the question. The built-in dinner question uses Korean if it appears anywhere in your preferred languages. Pasta is the second option in either version.
 
 ### The panel
 
@@ -110,7 +114,7 @@ Hover over a symbol to see its name.
 - A free-form answer that is not one of the options. It is passed along as is.
 - "skip", "pass" or "cancel" to go back to the app's own question dialog, and "again" to be heard once more
 
-The same works in Korean: "두 번째", "2번", "마지막", "1번이랑 3번", "건너뛰기", "다시".
+You can also give these answers and commands in Korean.
 
 ### Panel shortcuts
 
@@ -150,7 +154,7 @@ For local Qwen voices, install the runtime and model once, rebuild/install the a
 ./scripts/setup-qwen-tts.sh   # VQ_PYTHON=/path/to/python3.11 if needed
 ./scripts/install.sh --no-hooks
 vq tts use qwen
-vq tts preview --language ko
+vq tts preview --language en
 vq test
 ```
 
@@ -158,7 +162,7 @@ The adapter is bundled with the app; rebuilding is needed when adding Qwen to an
 
 The model is the [MLX community conversion](https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit) of [Qwen's Apache-2.0 CustomVoice model](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice), run through [MLX Audio](https://github.com/Neywa-Labs/mlx-audio). Model weights are stored in `~/Library/Application Support/VoiceQuestion/qwen-model` and the separate Python environment in `qwen-venv` alongside it. Setup uses the network; synthesis uses only the local model and sets Hugging Face / Transformers offline mode. Each request starts a bounded, cancellable worker, so model loading and generation add a wait before speech. This implementation generates the whole question before playback.
 
-Qwen uses the same `speechRate` setting, applied during playback (`0.5`–`2.0`). `vq tts preview --language ko --output sample.wav` exports **native-speed** WAV audio; the exported file does not include playback speed adjustment. `--voice Sohee` can preview a preset without saving it. Customize `tts.qwen.voices`, `tts.qwen.instruct`, `tts.qwen.modelPath`, `tts.qwen.pythonPath` or `tts.qwen.timeoutSeconds` (default 120, bounded to 300 seconds). These settings are separate from the online engine's names and interpreter. A missing model, failed generation or timeout falls back to the system voice and is identified in the log.
+Qwen uses the same `speechRate` setting, applied during playback (`0.5`–`2.0`). `vq tts preview --language en --output sample.wav` exports **native-speed** WAV audio; the exported file does not include playback speed adjustment. `--voice Sohee` can preview a preset without saving it. Customize `tts.qwen.voices`, `tts.qwen.instruct`, `tts.qwen.modelPath`, `tts.qwen.pythonPath` or `tts.qwen.timeoutSeconds` (default 120, bounded to 300 seconds). These settings are separate from the online engine's names and interpreter. A missing model, failed generation or timeout falls back to the system voice and is identified in the log.
 
 Online voices are optional. Install their runtime once (Python 3.9+ is required), then select the engine:
 
@@ -189,9 +193,9 @@ Korean defaults to `ko-KR-SunHiNeural`, English to `en-US-EmmaMultilingualNeural
 
 Other Korean choices include `ko-KR-InJoonNeural` and `ko-KR-HyunsuMultilingualNeural`; `en-US-JennyNeural` is another English choice. List current voice names with `"$HOME/Library/Application Support/VoiceQuestion/tts-venv/bin/python3" -m edge_tts --list-voices`. Online voice names go in `tts.voices`; macOS identifiers stay in the separate top-level `voices` map. An optional `tts.pythonPath` can point to your own Python environment.
 
-Korean option numbers are spoken as `일 번`, `이 번`, `삼 번` so TTS engines do not interpret them as repetition counts (`한 번`, `두 번`, `세 번`). Visible numbers and the answer labels sent back to the agent are unchanged. A different voice is a listening preference; neural synthesis alone does not guarantee natural-sounding Korean.
+For Korean questions, VoiceQuestion reads each option number using the form for a numbered choice. This avoids ambiguity with counting repetitions.
 
-If online synthesis fails, times out, or has no configured voice for the question's language, the question uses the offline macOS voice. Cancelling or answering a question stops synthesis and playback. Generated audio lives in a private temporary directory and is removed after playback or cancellation. For a sample you want to keep, `vq tts preview --language ko --output sample.mp3` exports without playing audio or opening a microphone; existing files are never overwritten.
+If online synthesis fails, times out, or has no configured voice for the question's language, the question uses the offline macOS voice. Cancelling or answering a question stops synthesis and playback. Generated audio lives in a private temporary directory and is removed after playback or cancellation. For a sample you want to keep, `vq tts preview --language en --output sample.mp3` exports without playing audio or opening a microphone; existing files are never overwritten.
 
 `edge-tts` is a third-party LGPL-3.0 client, installed separately in a user virtual environment; this is not an official Azure Speech integration and availability may change. The Swift app still builds and runs offline without it. Provider code is isolated in `NeuralSpeechRenderer.swift` and `Speaker.swift`, so other cloud or local engines can be added without changing question detection, dictation or answer delivery.
 
